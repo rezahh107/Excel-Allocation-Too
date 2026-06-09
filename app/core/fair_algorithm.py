@@ -4,11 +4,19 @@ from __future__ import annotations
 import math
 from abc import ABC, abstractmethod
 from collections import defaultdict
+from dataclasses import dataclass
 
 from app.core.models import FairnessMode, Mentor
 from app.utils.logger import get_logger
 
 log = get_logger("fair_algorithm")
+
+
+@dataclass
+class StrategyResult:
+    """Result of a distribution strategy."""
+    assignments: dict[str, list[int]]
+    rebalance_moves: int = 0
 
 
 class FairnessStrategy(ABC):
@@ -28,8 +36,8 @@ class FairnessStrategy(ABC):
         pool: list[int],
         mentors: list[Mentor],
         remaining: dict[str, int],
-    ) -> dict[str, list[int]]:
-        """Return mapping mentor_name -> added student indices."""
+    ) -> StrategyResult:
+        """Return StrategyResult with mentor->student mapping and rebalance moves."""
 
 
 class OriginalStrategy(FairnessStrategy):
@@ -40,7 +48,7 @@ class OriginalStrategy(FairnessStrategy):
         pool: list[int],
         mentors: list[Mentor],
         remaining: dict[str, int],
-    ) -> dict[str, list[int]]:
+    ) -> StrategyResult:
         log.debug("Original: توزیع %d دانش‌آموز", len(pool))
         out: dict[str, list[int]] = {m.name: [] for m in mentors}
 
@@ -54,7 +62,7 @@ class OriginalStrategy(FairnessStrategy):
             out[target].append(idx)
             remaining[target] -= 1
 
-        return out
+        return StrategyResult(assignments=out, rebalance_moves=0)
 
 
 class RoundRobinStrategy(FairnessStrategy):
@@ -65,7 +73,7 @@ class RoundRobinStrategy(FairnessStrategy):
         pool: list[int],
         mentors: list[Mentor],
         remaining: dict[str, int],
-    ) -> dict[str, list[int]]:
+    ) -> StrategyResult:
         log.debug("RoundRobin: توزیع %d دانش‌آموز", len(pool))
         out: dict[str, list[int]] = {m.name: [] for m in mentors}
 
@@ -73,7 +81,7 @@ class RoundRobinStrategy(FairnessStrategy):
         if not order:
             if pool:
                 raise RuntimeError("هیچ پشتیبانی برای تخصیص وجود ندارد.")
-            return out
+            return StrategyResult(assignments=out, rebalance_moves=0)
 
         start_idx = 0
         n = len(order)
@@ -94,7 +102,7 @@ class RoundRobinStrategy(FairnessStrategy):
             if not placed:
                 raise RuntimeError("ظرفیت کافی برای تخصیص وجود ندارد.")
 
-        return out
+        return StrategyResult(assignments=out, rebalance_moves=0)
 
 
 class MentorBalancedStrategy(FairnessStrategy):
@@ -105,7 +113,7 @@ class MentorBalancedStrategy(FairnessStrategy):
         pool: list[int],
         mentors: list[Mentor],
         remaining: dict[str, int],
-    ) -> dict[str, list[int]]:
+    ) -> StrategyResult:
         log.debug("MentorBalanced: توزیع %d دانش‌آموز", len(pool))
         out: dict[str, list[int]] = {m.name: [] for m in mentors}
         order_index = {m.name: i for i, m in enumerate(mentors)}
@@ -126,7 +134,7 @@ class MentorBalancedStrategy(FairnessStrategy):
             out[best.name].append(student_idx)
             remaining[best.name] -= 1
 
-        return out
+        return StrategyResult(assignments=out, rebalance_moves=0)
 
 
 class ManagerBalancedStrategy(FairnessStrategy):
@@ -137,7 +145,7 @@ class ManagerBalancedStrategy(FairnessStrategy):
         pool: list[int],
         mentors: list[Mentor],
         remaining: dict[str, int],
-    ) -> dict[str, list[int]]:
+    ) -> StrategyResult:
         log.debug("ManagerBalanced: توزیع %d دانش‌آموز", len(pool))
         out: dict[str, list[int]] = {m.name: [] for m in mentors}
         order_index = {m.name: i for i, m in enumerate(mentors)}
@@ -174,7 +182,7 @@ class ManagerBalancedStrategy(FairnessStrategy):
         # ── Phase 2: Rebalance Pass (Safe & Efficient) ──
         total_mentors = len(mentors)
         if total_mentors == 0:
-            return out
+            return StrategyResult(assignments=out, rebalance_moves=0)
 
         total_load = sum(_mgr_abs_load(mgr) for mgr in manager_groups)
         targets = {
@@ -218,30 +226,31 @@ class ManagerBalancedStrategy(FairnessStrategy):
                     if not out[over_m.name]:
                         continue
 
-                    receivers = [
-                        m for m in manager_groups[under_mgr]
-                        if remaining.get(m.name, 0) > 0
-                    ]
-                    if not receivers:
-                        continue
+                    # Find an underloaded manager that still has capacity
+                    for under_mgr in underloaded:
+                        receivers = [
+                            m for m in manager_groups[under_mgr]
+                            if remaining.get(m.name, 0) > 0
+                        ]
+                        if receivers:
+                            best_rx = min(receivers, key=lambda m: _abs_load(m.name))
+                            s_idx = out[over_m.name].pop()
+                            out[best_rx.name].append(s_idx)
+                            remaining[over_m.name] += 1
+                            remaining[best_rx.name] -= 1
+                            shifts_done += 1
+                            improved = True
 
-                    best_rx = min(receivers, key=lambda m: _abs_load(m.name))
+                            log.debug(
+                                "Rebalance: شیفت دانش‌آموز %d از %s (مدیر=%s) → %s (مدیر=%s)",
+                                s_idx, over_m.name, over_mgr, best_rx.name, under_mgr
+                            )
 
-                    s_idx = out[over_m.name].pop()
-                    out[best_rx.name].append(s_idx)
-                    remaining[over_m.name] += 1
-                    remaining[best_rx.name] -= 1
-
-                    shifts_done += 1
-                    improved = True
-
-                    log.debug(
-                        "Rebalance: شیفت دانش‌آموز %d از %s (مدیر=%s) → %s (مدیر=%s)",
-                        s_idx, over_m.name, over_mgr, best_rx.name, under_mgr
-                    )
-
-                    if shifts_done >= max_shifts:
-                        improved = False
+                            if shifts_done >= max_shifts:
+                                improved = False
+                                break
+                            break  # break out of under_mgr loop after first successful shift
+                    if not improved or shifts_done >= max_shifts:
                         break
 
                 if shifts_done >= max_shifts or not improved:
@@ -253,7 +262,7 @@ class ManagerBalancedStrategy(FairnessStrategy):
         if shifts_done > 0:
             log.info("ManagerBalanced Rebalance: %d شیفت در سکوت انجام شد.", shifts_done)
 
-        return out
+        return StrategyResult(assignments=out, rebalance_moves=shifts_done)
 
 
 def get_strategy(mode: FairnessMode) -> FairnessStrategy:

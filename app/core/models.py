@@ -119,6 +119,7 @@ class AllocationResult:
     stabilized: set[int] = field(default_factory=set)
     assigned: dict[str, list[int]] = field(default_factory=dict)
     num_moved: int = 0
+    rebalance_moves: int = 0
 
     @property
     def total_students(self) -> int:
