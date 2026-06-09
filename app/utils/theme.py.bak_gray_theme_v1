@@ -1,0 +1,327 @@
+"""Centralised colour palette and dark-mode stylesheet.
+
+Usage::
+
+    from app.utils.theme import apply_dark_theme
+    apply_dark_theme(app)
+"""
+from __future__ import annotations
+from PySide6.QtWidgets import QApplication
+
+
+class ColorPalette:
+    """Dark theme colour tokens used across the whole application."""
+
+    # ── backgrounds ────────────────────────────────────────────────
+    BG_PRIMARY   = "#1a1a2e"   # main window background
+    BG_SECONDARY = "#16213e"   # cards, panels, wizard pages
+    BG_SURFACE   = "#0f3460"   # interactive widgets
+    BG_INPUT     = "#1e2a45"   # line-edits, combo-boxes
+    BG_HOVER     = "#243555"   # hover state for items
+
+    # ── accents ────────────────────────────────────────────────────
+    ACCENT       = "#4361ee"   # primary buttons, selected items
+    ACCENT_HOVER = "#3a0ca3"   # button hover
+    ACCENT_LIGHT = "#4cc9f0"   # highlights / success info
+
+    # ── semantic ───────────────────────────────────────────────────
+    SUCCESS      = "#2e7d32"
+    SUCCESS_LIGHT= "#4caf50"
+    WARNING      = "#f77f00"
+    WARNING_LIGHT= "#ffb74d"
+    ERROR        = "#c62828"
+    ERROR_LIGHT  = "#ef5350"
+
+    # ── text ───────────────────────────────────────────────────────
+    TEXT_PRIMARY = "#e2e8f0"
+    TEXT_MUTED   = "#94a3b8"
+    TEXT_INVERSE = "#0f0f1a"
+
+    # ── borders / misc ─────────────────────────────────────────────
+    BORDER       = "#2d3748"
+    BORDER_FOCUS = "#4361ee"
+    SEPARATOR    = "#243555"
+
+
+P = ColorPalette  # short alias
+
+
+def _qss() -> str:
+    """Return the full dark-mode QSS stylesheet string."""
+    return f"""
+/* ── Global ───────────────────────────────────────────────── */
+QWidget {{
+    background-color: {P.BG_PRIMARY};
+    color: {P.TEXT_PRIMARY};
+    font-family: "Vazirmatn", "Tahoma", sans-serif;
+    font-size: 13px;
+}}
+QWizard, QDialog {{
+    background-color: {P.BG_PRIMARY};
+}}
+QWizardPage {{
+    background-color: {P.BG_SECONDARY};
+    border-radius: 10px;
+}}
+
+/* ── Buttons ───────────────────────────────────────────────── */
+QPushButton {{
+    background-color: {P.BG_SURFACE};
+    color: {P.TEXT_PRIMARY};
+    border: 1px solid {P.BORDER};
+    border-radius: 7px;
+    padding: 7px 18px;
+    font-weight: bold;
+}}
+QPushButton:hover {{
+    background-color: {P.BG_HOVER};
+    border-color: {P.BORDER_FOCUS};
+}}
+QPushButton:pressed {{
+    background-color: {P.ACCENT};
+}}
+QPushButton:disabled {{
+    background-color: {P.BG_SURFACE};
+    color: {P.TEXT_MUTED};
+    border-color: {P.SEPARATOR};
+}}
+QPushButton#btn_primary {{
+    background-color: {P.ACCENT};
+    color: white;
+    border: none;
+}}
+QPushButton#btn_primary:hover {{
+    background-color: {P.ACCENT_HOVER};
+}}
+QPushButton#btn_danger {{
+    background-color: {P.ERROR};
+    color: white;
+    border: none;
+}}
+QPushButton#btn_danger:hover {{
+    background-color: {P.ERROR_LIGHT};
+}}
+QPushButton#btn_secondary {{
+    background-color: transparent;
+    color: {P.ACCENT_LIGHT};
+    border: 1px solid {P.ACCENT};
+}}
+QPushButton#btn_secondary:hover {{
+    background-color: {P.BG_SURFACE};
+}}
+
+/* ── Inputs ────────────────────────────────────────────────── */
+QLineEdit, QComboBox, QSpinBox {{
+    background-color: {P.BG_INPUT};
+    color: {P.TEXT_PRIMARY};
+    border: 1px solid {P.BORDER};
+    border-radius: 6px;
+    padding: 5px 10px;
+    selection-background-color: {P.ACCENT};
+}}
+QLineEdit:focus, QComboBox:focus {{
+    border-color: {P.BORDER_FOCUS};
+}}
+QComboBox QAbstractItemView {{
+    background-color: {P.BG_INPUT};
+    color: {P.TEXT_PRIMARY};
+    selection-background-color: {P.ACCENT};
+    border: 1px solid {P.BORDER};
+}}
+
+/* ── Tables ────────────────────────────────────────────────── */
+QTableWidget, QTreeWidget {{
+    background-color: {P.BG_SECONDARY};
+    alternate-background-color: {P.BG_PRIMARY};
+    color: {P.TEXT_PRIMARY};
+    gridline-color: {P.BORDER};
+    border: 1px solid {P.BORDER};
+    border-radius: 8px;
+    font-family: "Vazirmatn", "Tahoma", sans-serif;
+}}
+QTableWidget::item:selected, QTreeWidget::item:selected {{
+    background-color: {P.ACCENT};
+    color: white;
+}}
+QTableWidget::item:hover, QTreeWidget::item:hover {{
+    background-color: {P.BG_HOVER};
+}}
+QHeaderView::section {{
+    background-color: {P.BG_SURFACE};
+    color: {P.TEXT_PRIMARY};
+    border: none;
+    border-bottom: 2px solid {P.ACCENT};
+    padding: 6px 10px;
+    font-weight: bold;
+}}
+
+/* ── Labels ────────────────────────────────────────────────── */
+QLabel {{
+    background: transparent;
+    color: {P.TEXT_PRIMARY};
+}}
+QLabel#lbl_title {{
+    font-size: 17px;
+    font-weight: bold;
+    color: {P.ACCENT_LIGHT};
+}}
+QLabel#lbl_muted {{
+    color: {P.TEXT_MUTED};
+    font-size: 12px;
+}}
+QLabel#lbl_error {{
+    color: {P.ERROR_LIGHT};
+    font-weight: bold;
+}}
+QLabel#lbl_success {{
+    color: {P.SUCCESS_LIGHT};
+    font-weight: bold;
+}}
+QLabel#lbl_warning {{
+    color: {P.WARNING_LIGHT};
+    font-weight: bold;
+}}
+
+/* ── Progress Bar ──────────────────────────────────────────── */
+QProgressBar {{
+    background-color: {P.BG_SURFACE};
+    border: 1px solid {P.BORDER};
+    border-radius: 6px;
+    text-align: center;
+    color: {P.TEXT_PRIMARY};
+    height: 20px;
+}}
+QProgressBar::chunk {{
+    background-color: {P.ACCENT};
+    border-radius: 5px;
+}}
+
+/* ── Scroll Bars ───────────────────────────────────────────── */
+QScrollBar:vertical {{
+    background: {P.BG_SECONDARY};
+    width: 8px;
+    border-radius: 4px;
+}}
+QScrollBar::handle:vertical {{
+    background: {P.BG_SURFACE};
+    border-radius: 4px;
+    min-height: 24px;
+}}
+QScrollBar::handle:vertical:hover {{
+    background: {P.ACCENT};
+}}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+    height: 0;
+}}
+QScrollBar:horizontal {{
+    background: {P.BG_SECONDARY};
+    height: 8px;
+    border-radius: 4px;
+}}
+QScrollBar::handle:horizontal {{
+    background: {P.BG_SURFACE};
+    border-radius: 4px;
+}}
+
+/* ── Group Box ─────────────────────────────────────────────── */
+QGroupBox {{
+    border: 1px solid {P.BORDER};
+    border-radius: 8px;
+    margin-top: 12px;
+    font-weight: bold;
+    color: {P.TEXT_MUTED};
+}}
+QGroupBox::title {{
+    subcontrol-origin: margin;
+    subcontrol-position: top right;
+    padding: 0 8px;
+    color: {P.ACCENT_LIGHT};
+}}
+
+/* ── Wizard Buttons ────────────────────────────────────────── */
+QWizard QPushButton[text="بعدی"],
+QWizard QPushButton[text="&Next >"] {{
+    background-color: {P.ACCENT};
+    color: white;
+    font-weight: bold;
+    min-width: 90px;
+    border: none;
+}}
+QWizard QPushButton[text="قبلی"],
+QWizard QPushButton[text="< &Back"] {{
+    background-color: {P.BG_SURFACE};
+    min-width: 80px;
+}}
+
+/* ── Frames ────────────────────────────────────────────────── */
+QFrame#card {{
+    background-color: {P.BG_SECONDARY};
+    border: 1px solid {P.BORDER};
+    border-radius: 10px;
+}}
+QFrame[frameShape="4"],
+QFrame[frameShape="5"] {{
+    color: {P.SEPARATOR};
+}}
+
+/* ── Status Bar ────────────────────────────────────────────── */
+QStatusBar {{
+    background-color: {P.BG_SURFACE};
+    color: {P.TEXT_MUTED};
+    border-top: 1px solid {P.BORDER};
+}}
+QStatusBar QLabel {{
+    color: {P.TEXT_MUTED};
+    padding: 0 8px;
+}}
+
+/* ── RadioButton / CheckBox ────────────────────────────────── */
+QRadioButton, QCheckBox {{
+    color: {P.TEXT_PRIMARY};
+    spacing: 8px;
+}}
+QRadioButton::indicator:checked, QCheckBox::indicator:checked {{
+    background-color: {P.ACCENT};
+    border: 2px solid {P.ACCENT};
+    border-radius: 6px;
+}}
+QRadioButton::indicator:unchecked, QCheckBox::indicator:unchecked {{
+    background-color: {P.BG_INPUT};
+    border: 2px solid {P.BORDER};
+    border-radius: 6px;
+}}
+
+/* ── Tooltip ────────────────────────────────────────────────── */
+QToolTip {{
+    background-color: {P.BG_SURFACE};
+    color: {P.TEXT_PRIMARY};
+    border: 1px solid {P.BORDER_FOCUS};
+    border-radius: 6px;
+    padding: 5px 10px;
+    font-family: "Vazirmatn", "Tahoma";
+}}
+
+/* ── List Widget ────────────────────────────────────────────── */
+QListWidget {{
+    background-color: {P.BG_SECONDARY};
+    border: 1px solid {P.BORDER};
+    border-radius: 6px;
+    alternate-background-color: {P.BG_PRIMARY};
+}}
+QListWidget::item:selected {{
+    background-color: {P.ACCENT};
+}}
+
+/* ── Text Edit ──────────────────────────────────────────────── */
+QTextEdit {{
+    background-color: {P.BG_INPUT};
+    color: {P.TEXT_PRIMARY};
+    border: 1px solid {P.BORDER};
+    border-radius: 6px;
+}}
+"""
+
+
+def apply_dark_theme(app: QApplication) -> None:
+    """Apply the dark colour palette globally to the application."""
+    app.setStyleSheet(_qss())
