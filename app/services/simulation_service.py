@@ -142,6 +142,10 @@ def simulate(
     """
     import math
     from app.core.models import AllocationResult, FairnessMode
+    from app.core.validation import (
+        validate_preconditions,
+        validate_postconditions,
+    )
     from app.services.allocation_service import (
         _compute_stabilised,
         _allocate_original,
@@ -151,16 +155,19 @@ def simulate(
         _STRATEGY,
     )
 
-    if not mentors:
-        raise ValueError("لیست پشتیبان‌ها خالی است.")
-    if not students:
-        raise ValueError("لیست دانش‌آموزان خالی است.")
-
-    # Calculate capacity if not provided
+    # Calculate capacity if not provided.
+    # Keep this before validate_preconditions so the validation layer receives
+    # the effective capacity value. capacity=0 is still intentionally not
+    # finalized as a domain rule.
     if capacity is None:
         capacity = math.ceil(len(students) / max(len(mentors), 1))
 
-    # Set capacity on mentor objects
+    validate_preconditions(students, mentors, capacity)
+
+    # Set capacity on mentor objects.
+    # NOTE: This preserves legacy behavior. simulate() currently mutates
+    # mentor.capacity when it is 0. Do not remove this without a separate
+    # mutation-safety refactor.
     for m in mentors:
         if m.capacity == 0:
             m.capacity = capacity
@@ -172,6 +179,8 @@ def simulate(
     strategy = _STRATEGY.get(fairness, _allocate_round_robin)
 
     assigned, num_moved = strategy(students, mentors, capacity, stabilised)
+
+    validate_postconditions(students, mentors, assigned)
 
     result = AllocationResult(
         students=students,
