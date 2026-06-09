@@ -1,6 +1,7 @@
 """Step 3 — distribution settings."""
 from __future__ import annotations
 
+from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -13,11 +14,14 @@ from PySide6.QtWidgets import (
 )
 
 from app.core.models import FairnessMode, WizardState
+from app.utils.logger import get_logger
 from app.utils.rtl_utils import apply_rtl
 from app.utils.theme import ColorPalette as P
 from app.ui.widgets.mini_dashboard import MiniDashboard
 from app.services.domain_service import build_domain
 from app.services.simulation_service import simulate
+
+log = get_logger("step3_settings")
 
 
 _FAIRNESS_DESCRIPTIONS: dict[FairnessMode, str] = {
@@ -42,7 +46,7 @@ _FAIRNESS_DESCRIPTIONS: dict[FairnessMode, str] = {
 
 
 class Step3Settings(QWizardPage):
-    """Step 3: allocation settings."""
+    """Step 3: allocation settings with live preview."""
 
     def __init__(self, state: WizardState) -> None:
         super().__init__()
@@ -118,18 +122,39 @@ class Step3Settings(QWizardPage):
         stab_lay.addWidget(stab_info)
         lay.addWidget(stab_group)
 
-        # ── live dashboard (read-only) ───────────────────────────
+        # ── live dashboard ───────────────────────────
         self.dashboard = MiniDashboard()
         lay.addWidget(self.dashboard)
 
-        self.fairness_combo.currentIndexChanged.connect(
-            self._refresh_dashboard
-        )
+        # Debounced live connections
+        self.fairness_combo.currentIndexChanged.connect(self._refresh_dashboard)
         self.auto_capacity.toggled.connect(self._refresh_dashboard)
-        self.capacity_spin.valueChanged.connect(self._refresh_dashboard)
         self.stabilize_chk.toggled.connect(self._refresh_dashboard)
 
+        # Debounce for spinbox (prevents multiple simulates on typing)
+        self._debounce_timer = QTimer(self)
+        self._debounce_timer.setSingleShot(True)
+        self._debounce_timer.setInterval(300)
+        self._debounce_timer.timeout.connect(self._refresh_dashboard)
+        self.capacity_spin.valueChanged.connect(self._debounce_timer.start)
+
         lay.addStretch()
+
+    def sync_from_state(self) -> None:
+        """Sync widgets from wizard state (used by project load)."""
+        idx = self.fairness_combo.findData(self.state.fairness)
+        if idx >= 0:
+            self.fairness_combo.setCurrentIndex(idx)
+
+        is_auto = self.state.capacity_override is None
+        self.auto_capacity.setChecked(is_auto)
+        self.capacity_spin.setEnabled(not is_auto)
+
+        if self.state.capacity_override is not None:
+            self.capacity_spin.setValue(self.state.capacity_override)
+
+        self.stabilize_chk.setChecked(self.state.stabilize_initial)
+        self._refresh_dashboard()
 
     def _update_fairness_desc(self) -> None:
         mode: FairnessMode = self.fairness_combo.currentData()
@@ -143,17 +168,10 @@ class Step3Settings(QWizardPage):
             self.fairness_desc.setStyleSheet(f"color:{P.TEXT_MUTED};")
 
     def initializePage(self) -> None:  # noqa: N802
-        """Refresh live dashboard when Step 3 becomes visible."""
         self._refresh_dashboard()
 
     def _refresh_dashboard(self) -> None:
-        """Refresh Step 3 live dashboard.
-
-        Defensive by design:
-        - never mutates committed wizard settings
-        - never crashes the wizard
-        - shows placeholders if domain/simulation is not ready
-        """
+        """Refresh live dashboard. Logs errors instead of silent fail."""
         try:
             fairness = self.fairness_combo.currentData()
             capacity = (
@@ -172,8 +190,11 @@ class Step3Settings(QWizardPage):
                 stabilize_initial=stabilize,
             )
 
-            self.dashboard.update_from(students, mentors, result)
-        except Exception:
+            self.dashboard.update_from(
+                students, mentors, result, fairness_mode=fairness
+            )
+        except Exception as exc:
+            log.warning("Step3 dashboard refresh failed: %s", exc)
             if hasattr(self, "dashboard"):
                 self.dashboard.show_placeholder()
 

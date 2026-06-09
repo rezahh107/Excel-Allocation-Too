@@ -1,12 +1,6 @@
 """MiniDashboard — live read-only allocation stats widget for Step 3.
 
-Colour names are aligned with the project's ColorPalette:
-    BG_SURFACE / BORDER / TEXT_PRIMARY / TEXT_MUTED
-    SUCCESS_LIGHT / WARNING / ERROR / TEXT_SECONDARY
-
-Public API:
-    dashboard.show_placeholder()                     -> reset all cards to —
-    dashboard.update_from(students, mentors, result) -> refresh everything
+v2: Proper enum handling for rebalance section + improved display.
 """
 from __future__ import annotations
 
@@ -19,6 +13,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from app.core.models import FairnessMode
 from app.utils.logger import get_logger
 from app.utils.theme import ColorPalette as P
 
@@ -26,7 +21,7 @@ log = get_logger("mini_dashboard")
 
 
 class _StatCard(QFrame):
-    """Single compact stat card: icon-title on top, big value, small hint."""
+    """Single compact stat card."""
 
     def __init__(self, title: str) -> None:
         super().__init__()
@@ -84,18 +79,13 @@ class _StatCard(QFrame):
 
 
 class MiniDashboard(QGroupBox):
-    """Live read-only dashboard wired into Step 3.
-
-    Safe to call with None/empty data — shows placeholder dashes.
-    Exceptions are logged and suppressed so the wizard is never broken.
-    """
+    """Live read-only dashboard with correct Rebalance support."""
 
     def __init__(self) -> None:
         super().__init__("📊 پیش‌نمایش زنده توزیع")
         self.setLayoutDirection(Qt.RightToLeft)
         self._build_ui()
 
-    # ── UI construction ───────────────────────────────────────────
     def _build_ui(self) -> None:
         outer = QVBoxLayout(self)
         outer.setContentsMargins(8, 8, 8, 8)
@@ -121,6 +111,21 @@ class MiniDashboard(QGroupBox):
             grid.addWidget(card, 0, col)
 
         outer.addLayout(grid)
+
+        # Rebalance impact (fixed in v2)
+        self._rebalance_box = QLabel("")
+        self._rebalance_box.setWordWrap(True)
+        self._rebalance_box.setAlignment(Qt.AlignCenter)
+        self._rebalance_box.setStyleSheet(
+            f"color:{P.SUCCESS_LIGHT};"
+            "font-size:11px;"
+            f"background:{P.BG_SURFACE};"
+            f"border:1px solid {P.SUCCESS_LIGHT};"
+            "border-radius:4px;"
+            "padding:5px 8px;"
+        )
+        self._rebalance_box.hide()
+        outer.addWidget(self._rebalance_box)
 
         self._manager_detail = QLabel("")
         self._manager_detail.setWordWrap(True)
@@ -153,7 +158,6 @@ class MiniDashboard(QGroupBox):
 
     # ── Public API ────────────────────────────────────────────────
     def show_placeholder(self) -> None:
-        """Reset all cards to — (used before any data is loaded)."""
         for card in (
             self.card_students,
             self.card_mentors,
@@ -163,22 +167,23 @@ class MiniDashboard(QGroupBox):
         ):
             card.set_value("—")
 
+        self._rebalance_box.setText("")
+        self._rebalance_box.hide()
         self._manager_detail.setText("")
         self._manager_detail.hide()
-
         self._warn.setText("")
         self._warn.hide()
 
-    def update_from(self, students, mentors, result) -> None:
-        """Refresh dashboard. Fully defensive — never raises."""
+    def update_from(
+        self, students, mentors, result, fairness_mode=None
+    ) -> None:
         try:
-            self._update_impl(students, mentors, result)
+            self._update_impl(students, mentors, result, fairness_mode)
         except Exception as exc:
             log.warning("MiniDashboard update failed: %s", exc)
             self.show_placeholder()
 
-    # ── Implementation ────────────────────────────────────────────
-    def _update_impl(self, students, mentors, result) -> None:
+    def _update_impl(self, students, mentors, result, fairness_mode) -> None:
         n_students = len(students) if students else 0
         n_mentors = len(mentors) if mentors else 0
 
@@ -186,22 +191,17 @@ class MiniDashboard(QGroupBox):
         self.card_mentors.set_value(str(n_mentors))
 
         if result is None or n_mentors == 0:
-            for card in (
-                self.card_capacity,
-                self.card_mentor_b,
-                self.card_manager_b,
-            ):
+            for card in (self.card_capacity, self.card_mentor_b, self.card_manager_b):
                 card.set_value("—")
-            self._manager_detail.setText("")
+            self._rebalance_box.hide()
             self._manager_detail.hide()
-            self._warn.setText("")
             self._warn.hide()
             return
 
         cap = getattr(result, "capacity", 0) or 0
         self.card_capacity.set_value(str(cap), "بیشینه هر پشتیبان")
 
-        loads_map: dict = (
+        loads_map = (
             result.load_per_mentor()
             if callable(getattr(result, "load_per_mentor", None))
             else {}
@@ -214,30 +214,27 @@ class MiniDashboard(QGroupBox):
             mentor_spread = mx - mn
             color = self._spread_color(mentor_spread, low=1, mid=3)
             self.card_mentor_b.set_value(
-                f"±{mentor_spread}",
-                f"{mn} … {mx} نفر",
-                color,
+                f"±{mentor_spread}", f"{mn} … {mx} نفر", color
             )
         else:
             self.card_mentor_b.set_value("—", "")
 
+        # Rebalance section - fixed enum comparison
+        self._update_rebalance_section(result, fairness_mode)
+
         mgr = self._safe_manager_report(result)
         self._apply_manager_diagnostics(mgr)
 
+        # Warnings
         warnings: list[str] = []
         if mentor_spread > 3:
-            warnings.append(
-                f"اختلاف بار پشتیبان‌ها زیاد است (±{mentor_spread})."
-            )
-
+            warnings.append(f"اختلاف بار پشتیبان‌ها زیاد است (±{mentor_spread}).")
         if mgr.get("managers"):
             max_dev = self._as_float(mgr.get("max_deviation", 0.0))
             if max_dev > 1.0:
                 warnings.append(
-                    "توزیع بین مدیرها از هدف فاصله دارد "
-                    f"(حداکثر انحراف: {self._fmt_float(max_dev)})."
+                    f"توزیع بین مدیرها از هدف فاصله دارد (حداکثر انحراف: {self._fmt_float(max_dev)})."
                 )
-
         if loads and cap and max(loads) > cap:
             warnings.append("⚠ برخی پشتیبان‌ها از ظرفیت عبور کرده‌اند.")
 
@@ -245,8 +242,31 @@ class MiniDashboard(QGroupBox):
             self._warn.setText("  |  ".join(warnings))
             self._warn.show()
         else:
-            self._warn.setText("")
             self._warn.hide()
+
+    def _update_rebalance_section(self, result, fairness_mode) -> None:
+        """Show rebalance info only for MANAGER_BALANCED (fixed in v2)."""
+        if fairness_mode != FairnessMode.MANAGER_BALANCED:
+            self._rebalance_box.hide()
+            return
+
+        rebalance_moves = 0
+        try:
+            if hasattr(result, "rebalance_moves"):
+                rebalance_moves = int(getattr(result, "rebalance_moves", 0))
+            elif hasattr(result, "metadata") and isinstance(result.metadata, dict):
+                rebalance_moves = int(result.metadata.get("rebalance_moves", 0))
+        except Exception:
+            pass
+
+        if rebalance_moves > 0:
+            text = f"🔄 Rebalance Pass فعال — {rebalance_moves} شیفت برای تعادل مدیرها"
+        else:
+            # Show that rebalance is active even if exact count not yet exposed by simulation
+            text = "🔄 Rebalance Pass فعال (توزیع بین مدیرها بهینه‌سازی می‌شود)"
+
+        self._rebalance_box.setText(text)
+        self._rebalance_box.show()
 
     def _apply_manager_diagnostics(self, mgr: dict) -> None:
         managers = mgr.get("managers") or []
@@ -264,23 +284,11 @@ class MiniDashboard(QGroupBox):
         max_load = self._as_int(mgr.get("max_load", 0))
         hint = f"{min_load} … {max_load} نفر"
 
-        self.card_manager_b.set_value(
-            f"±{self._fmt_float(max_dev)}",
-            hint,
-            color,
-        )
+        self.card_manager_b.set_value(f"±{self._fmt_float(max_dev)}", hint, color)
 
-        loads = mgr.get("loads") if isinstance(mgr.get("loads"), dict) else {}
-        targets = (
-            mgr.get("targets")
-            if isinstance(mgr.get("targets"), dict)
-            else {}
-        )
-        deviations = (
-            mgr.get("deviations")
-            if isinstance(mgr.get("deviations"), dict)
-            else {}
-        )
+        loads = mgr.get("loads") or {}
+        targets = mgr.get("targets") or {}
+        deviations = mgr.get("deviations") or {}
 
         ranked = sorted(
             [name for name in managers if isinstance(name, str)],
@@ -297,33 +305,23 @@ class MiniDashboard(QGroupBox):
             target_val = self._as_float(targets.get(name, 0.0))
             dev_val = self._as_float(deviations.get(name, 0.0))
             parts.append(
-                f"{name}: "
-                f"{load_val}/{self._fmt_float(target_val)} "
-                f"({self._fmt_signed_float(dev_val)})"
+                f"{name}: {load_val}/{self._fmt_float(target_val)} ({self._fmt_signed_float(dev_val)})"
             )
 
         if len(parts) > 1:
             self._manager_detail.setText("  |  ".join(parts))
             self._manager_detail.show()
         else:
-            self._manager_detail.setText("")
             self._manager_detail.hide()
 
     def _safe_manager_report(self, result) -> dict:
-        """Lazy-import and safely call manager_report()."""
         try:
             from app.services.simulation_service import manager_report
-        except Exception as exc:
-            log.debug("manager_report import unavailable: %s", exc)
-            return {}
-
-        try:
             data = manager_report(result)
+            return data if isinstance(data, dict) else {}
         except Exception as exc:
-            log.warning("manager_report failed: %s", exc)
+            log.debug("manager_report unavailable: %s", exc)
             return {}
-
-        return data if isinstance(data, dict) else {}
 
     # ── Helpers ───────────────────────────────────────────────────
     @staticmethod
