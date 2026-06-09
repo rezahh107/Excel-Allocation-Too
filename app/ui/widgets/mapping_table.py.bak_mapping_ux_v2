@@ -1,0 +1,125 @@
+"""Editable column-mapping table with colour-coded validation."""
+from __future__ import annotations
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QColor
+from PySide6.QtWidgets import (QComboBox, QHeaderView, QLabel,
+                               QTableWidget, QTableWidgetItem, QVBoxLayout,
+                               QWidget)
+
+from app.core.models import Role
+from app.utils.theme import ColorPalette as P
+
+
+class MappingTable(QWidget):
+    """Three-column table: original | detected | override dropdown.
+
+    Rows are colour-coded:
+    * Green  — required role correctly mapped.
+    * Red    — required role missing (NONE selected).
+    * Default — optional or unmapped column.
+    """
+    mappingChanged = Signal()
+
+    def __init__(self, required: set[Role] | None = None) -> None:
+        super().__init__()
+        self._required: set[Role] = required or set()
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        self.table = QTableWidget(0, 3)
+        self.table.setHorizontalHeaderLabels(
+            ["ستون اصلی", "نقش تشخیص‌داده‌شده", "تغییر دستی"])
+        hh = self.table.horizontalHeader()
+        hh.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.table.setAlternatingRowColors(False)
+        lay.addWidget(self.table)
+        self.error_lbl = QLabel("")
+        self.error_lbl.setObjectName("lbl_error")
+        self.error_lbl.setWordWrap(True)
+        lay.addWidget(self.error_lbl)
+        self._combos: dict[str, QComboBox] = {}
+
+    def load(self, mapping: dict[str, Role]) -> None:
+        """Populate the table from a *mapping* dict."""
+        self.table.setRowCount(0)
+        self._combos.clear()
+        for col, role in mapping.items():
+            r = self.table.rowCount()
+            self.table.insertRow(r)
+            # column 0 — original name
+            item0 = QTableWidgetItem(col)
+            item0.setFlags(item0.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            self.table.setItem(r, 0, item0)
+            # column 1 — detected role (read-only)
+            item1 = QTableWidgetItem(role.value)
+            item1.setFlags(item1.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            self.table.setItem(r, 1, item1)
+            # column 2 — override combo
+            combo = QComboBox()
+            for rl in Role:
+                combo.addItem(rl.value, rl)
+            combo.setCurrentText(role.value)
+            combo.currentIndexChanged.connect(self._on_combo_changed)
+            self._combos[col] = combo
+            self.table.setCellWidget(r, 2, combo)
+        self._recolour()
+
+    def _on_combo_changed(self) -> None:
+        self._recolour()
+        self.mappingChanged.emit()
+
+    def _recolour(self) -> None:
+        """Colour each row based on required/optional/error status."""
+        current = self.current_mapping()
+        assigned_roles = set(current.values())
+        for row in range(self.table.rowCount()):
+            col_name = self.table.item(row, 0).text()
+            role = current.get(col_name, Role.NONE)
+            is_required = role in self._required
+            missing_required = (role == Role.NONE
+                                and any(
+                                    req not in assigned_roles
+                                    for req in self._required))
+            # determine row colour
+            if role in self._required:
+                bg = QColor(P.SUCCESS + "55")   # green tint
+                fg = QColor(P.SUCCESS_LIGHT)
+            elif role == Role.NONE:
+                # check if this column's required role is missing
+                bg = QColor(P.BG_SECONDARY)
+                fg = QColor(P.TEXT_MUTED)
+            else:
+                bg = QColor(P.BG_SECONDARY)
+                fg = QColor(P.TEXT_PRIMARY)
+            for c in range(3):
+                it = self.table.item(row, c)
+                if it:
+                    it.setBackground(bg)
+                    it.setForeground(fg)
+        # highlight rows where required role is NOT yet satisfied
+        missing = {r for r in self._required
+                   if r not in set(current.values())}
+        for row in range(self.table.rowCount()):
+            col_name = self.table.item(row, 0).text()
+            # if combo is NONE and this column could fill a missing role
+            # paint red as hint
+            role = current.get(col_name, Role.NONE)
+            if role == Role.NONE and missing:
+                bg = QColor(P.ERROR + "33")
+                for c in range(3):
+                    it = self.table.item(row, c)
+                    if it:
+                        it.setBackground(bg)
+
+    def current_mapping(self) -> dict[str, Role]:
+        """Return the current column → role mapping."""
+        return {col: cb.currentData()
+                for col, cb in self._combos.items()}
+
+    def set_inline_error(self, errors: list[str]) -> None:
+        """Display inline validation errors below the table."""
+        if errors:
+            self.error_lbl.setText("⚠ " + "  |  ".join(errors))
+            self.error_lbl.show()
+        else:
+            self.error_lbl.clear()
+            self.error_lbl.hide()

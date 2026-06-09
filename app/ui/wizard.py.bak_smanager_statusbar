@@ -1,0 +1,258 @@
+"""Main wizard window — status bar (C1), tooltips (C2),
+toast (C3), geometry persistence (C4), QSettings."""
+from __future__ import annotations
+import json
+
+from PySide6.QtCore import QSettings, Qt
+from PySide6.QtGui import QKeySequence, QShortcut
+from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QMessageBox,
+                               QSizePolicy, QStatusBar, QVBoxLayout,
+                               QWidget, QWizard)
+
+from app.core.models import FairnessMode, WizardState
+from app.ui.pages.step1_load import Step1Load
+from app.ui.pages.step2_mapping import Step2Mapping
+from app.ui.pages.step3_settings import Step3Settings
+from app.ui.pages.step4_preview import Step4Preview
+from app.ui.pages.step5_execute import Step5Execute
+from app.ui.pages.step6_export import Step6Export
+from app.ui.widgets.toast import Toast
+from app.utils.logger import get_logger
+from app.utils.rtl_utils import apply_rtl
+from app.utils.theme import ColorPalette as P
+
+log = get_logger("wizard")
+
+_ORG  = "ClaudeOpus"
+_APP  = "ExcelAllocationTool"
+
+
+class _Divider(QFrame):
+    """Thin vertical separator for the status bar."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.setFrameShape(QFrame.Shape.VLine)
+        self.setFixedWidth(1)
+        self.setStyleSheet(f"color:{P.SEPARATOR}")
+
+
+class AllocationWizard(QWizard):
+    """Six-step student-mentor allocation wizard.
+
+    Enhancements included:
+        C1 — persistent status bar
+        C2 — smart tooltip on Next button
+        C3 — toast notifications
+        C4 — window geometry persistence
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        apply_rtl(self)
+        self.setWindowTitle("سامانه تخصیص پشتیبان  ·  v3.0")
+        self.setWizardStyle(QWizard.WizardStyle.ModernStyle)
+        self.resize(1020, 780)
+        self.setOption(QWizard.WizardOption.IndependentPages, False)
+        self.setOption(QWizard.WizardOption.HaveHelpButton, True)
+
+        # ── shared state ────────────────────────────────────────
+        self.settings = QSettings(_ORG, _APP)
+        self.state    = WizardState()
+        self._load_settings()
+
+        # ── pages ───────────────────────────────────────────────
+        self.s1 = Step1Load(self.state)
+        self.s2 = Step2Mapping(self.state)
+        self.s3 = Step3Settings(self.state)
+        self.s4 = Step4Preview(self.state)
+        self.s5 = Step5Execute(self.state)
+        self.s6 = Step6Export(self.state)
+        for page in (self.s1, self.s2, self.s3,
+                     self.s4, self.s5, self.s6):
+            self.addPage(page)
+
+        # ── toast (C3) ──────────────────────────────────────────
+        self.toast = Toast(self)
+
+        # ── status bar (C1) ─────────────────────────────────────
+        self._build_status_bar()
+
+        # ── shortcuts ───────────────────────────────────────────
+        self._setup_shortcuts()
+
+        # ── signals ─────────────────────────────────────────────
+        self.currentIdChanged.connect(self._on_page_changed)
+        self.helpRequested.connect(self._show_help)
+        self.finished.connect(self._save_settings)
+
+        # ── restore geometry (C4) ───────────────────────────────
+        geo = self.settings.value("geometry")
+        if geo:
+            self.restoreGeometry(geo)
+
+        # ── auto-reload previous files ──────────────────────────
+        self.s1.restore_paths()
+        self.refresh_status()
+
+    # ── status bar (C1) ─────────────────────────────────────────
+    def _build_status_bar(self) -> None:
+        """Inject a persistent status bar below the wizard buttons."""
+        self._sb_students = QLabel("دانش‌آموز: —")
+        self._sb_mentors  = QLabel("پشتیبان: —")
+        self._sb_capacity = QLabel("ظرفیت: —")
+        self._sb_mode     = QLabel("حالت: —")
+        self._sb_state    = QLabel("⏳ در انتظار فایل")
+
+        bar_widget = QWidget()
+        bar_widget.setObjectName("statusBar")
+        bar_widget.setStyleSheet(
+            f"QWidget#statusBar{{background:{P.BG_SURFACE};"
+            f"border-top:1px solid {P.BORDER};}}"
+            f"QLabel{{color:{P.TEXT_MUTED};"
+            "padding:3px 8px;font-size:12px;}}")
+        h = QHBoxLayout(bar_widget)
+        h.setContentsMargins(8, 2, 8, 2)
+        h.setSpacing(0)
+        for lbl in (self._sb_students, self._sb_mentors,
+                    self._sb_capacity, self._sb_mode, self._sb_state):
+            h.addWidget(lbl)
+            h.addWidget(_Divider())
+        h.addStretch()
+
+        # inject below the wizard's own layout
+        main_layout = self.layout()
+        if main_layout:
+            main_layout.addWidget(bar_widget)
+        self._status_bar_widget = bar_widget
+
+    def refresh_status(self) -> None:
+        """Refresh all status bar labels from current WizardState."""
+        s = self.state
+        if s.book2_rows:
+            self._sb_students.setText(f"دانش‌آموز: {len(s.book2_rows)}")
+        if s.book1_rows:
+            self._sb_mentors.setText(f"پشتیبان: {len(s.book1_rows)}")
+        if s.result:
+            self._sb_capacity.setText(f"ظرفیت: {s.result.capacity}")
+            self._sb_state.setText("✅  آماده خروجی")
+            self._sb_state.setStyleSheet(
+                f"color:{P.SUCCESS_LIGHT};font-weight:bold;"
+                "padding:3px 8px;font-size:12px;")
+        elif s.book1_rows and s.book2_rows:
+            self._sb_state.setText("✅  فایل‌ها بارگذاری شدند")
+            self._sb_state.setStyleSheet(
+                f"color:{P.SUCCESS_LIGHT};"
+                "padding:3px 8px;font-size:12px;")
+        else:
+            self._sb_state.setText("⏳  در انتظار فایل")
+            self._sb_state.setStyleSheet(
+                f"color:{P.TEXT_MUTED};"
+                "padding:3px 8px;font-size:12px;")
+        self._sb_mode.setText(f"حالت: {s.fairness.value}")
+
+    # ── smart tooltip on Next (C2) ──────────────────────────────
+    def _on_page_changed(self, page_id: int) -> None:
+        page    = self.currentPage()
+        next_btn = self.button(QWizard.WizardButton.NextButton)
+        if next_btn is None or page is None:
+            return
+        if not page.isComplete():
+            reason = getattr(page, "incomplete_reason",
+                             lambda: "این مرحله هنوز کامل نشده است")()
+            next_btn.setToolTip(f"⚠  {reason}")
+        else:
+            next_btn.setToolTip("")
+        # resize toast anchor on page change
+        if hasattr(self, "toast"):
+            self.toast.hide()
+
+    # ── shortcuts ───────────────────────────────────────────────
+    def _setup_shortcuts(self) -> None:
+        """Register all global keyboard shortcuts.
+
+        +----------+---------------------------------------------+
+        | Ctrl+O   | Jump to Step 1 (open files)                 |
+        | Ctrl+S   | Export from any page                        |
+        | Ctrl+Z   | Undo (Step 4)                               |
+        | Ctrl+Y   | Redo (Step 4)                               |
+        | F1       | Help dialog                                 |
+        +----------+---------------------------------------------+
+        """
+        QShortcut(QKeySequence("Ctrl+O"), self,
+                  lambda: self.setCurrentId(self.pageIds()[0]))
+        QShortcut(QKeySequence("Ctrl+S"), self,
+                  self._global_export)
+        QShortcut(QKeySequence("Ctrl+Z"), self,
+                  lambda: self.s4.undo_stack.undo())
+        QShortcut(QKeySequence("Ctrl+Y"), self,
+                  lambda: self.s4.undo_stack.redo())
+        QShortcut(QKeySequence("F1"), self,
+                  self._show_help)
+
+    def _global_export(self) -> None:
+        """Trigger export from any wizard page."""
+        if self.state.result is None:
+            self.toast.show_message(
+                "ابتدا تخصیص را اجرا کنید (مرحله ۵).", "warning")
+            return
+        self.s6.export()
+
+    def _show_help(self) -> None:
+        QMessageBox.information(
+            self, "راهنمای میان‌برها",
+            "━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "  Ctrl+O    بارگذاری فایل‌ها (مرحله ۱)\n"
+            "  Ctrl+S    خروجی گرفتن (از هر صفحه)\n"
+            "  Ctrl+Z    واگرد (مرحله ۴)\n"
+            "  Ctrl+Y    ازنو  (مرحله ۴)\n"
+            "  F1        این راهنما\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━")
+
+    # ── resize toast on window resize ───────────────────────────
+    def resizeEvent(self, e):  # noqa: N802
+        super().resizeEvent(e)
+        if hasattr(self, "toast") and self.toast.isVisible():
+            x = self.width()  - self.toast.width()  - 20
+            y = self.height() - self.toast.height() - 55
+            self.toast.move(x, y)
+
+    # ── QSettings persistence ────────────────────────────────────
+    def _load_settings(self) -> None:
+        """Restore file paths, mappings, fairness mode from disk."""
+        self.state.book1_path  = self.settings.value("last_book1", "", str)
+        self.state.book2_path  = self.settings.value("last_book2", "", str)
+        self.state.saved_map1  = self._load_json("map1_json")
+        self.state.saved_map2  = self._load_json("map2_json")
+        mode = self.settings.value(
+            "fairness", FairnessMode.ROUND_ROBIN.value, str)
+        try:
+            self.state.fairness = FairnessMode(mode)
+        except ValueError:
+            self.state.fairness = FairnessMode.ROUND_ROBIN
+        log.info("تنظیمات بارگذاری شد.")
+
+    def _load_json(self, key: str) -> dict[str, str]:
+        raw = self.settings.value(key, "", str)
+        if not raw:
+            return {}
+        try:
+            return dict(json.loads(raw))
+        except (ValueError, TypeError):
+            return {}
+
+    def _save_settings(self) -> None:
+        """Persist file paths, mappings, fairness mode and geometry."""
+        self.settings.setValue("last_book1", self.state.book1_path)
+        self.settings.setValue("last_book2", self.state.book2_path)
+        self.settings.setValue(
+            "map1_json",
+            json.dumps({c: r.value for c, r in self.state.map1.items()},
+                       ensure_ascii=False))
+        self.settings.setValue(
+            "map2_json",
+            json.dumps({c: r.value for c, r in self.state.map2.items()},
+                       ensure_ascii=False))
+        self.settings.setValue("fairness", self.state.fairness.value)
+        self.settings.setValue("geometry", self.saveGeometry())   # C4
+        log.info("تنظیمات ذخیره شد.")

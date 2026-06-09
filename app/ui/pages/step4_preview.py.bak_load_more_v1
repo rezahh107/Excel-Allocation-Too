@@ -1,0 +1,146 @@
+"""Step 4 — drag & drop preview with undo/redo (B7, B8)."""
+from __future__ import annotations
+from PySide6.QtGui import QUndoStack
+from PySide6.QtWidgets import (QHBoxLayout, QLabel, QMessageBox,
+                               QPushButton, QVBoxLayout, QWizardPage)
+
+from app.core.models import WizardState
+from app.services.domain_service import build_domain
+from app.services.simulation_service import simulate
+from app.ui.commands import ReassignCommand
+from app.ui.widgets.allocation_tree import AllocationTree
+from app.utils.rtl_utils import apply_rtl
+from app.utils.theme import ColorPalette as P
+
+
+class Step4Preview(QWizardPage):
+    """Preview page: drag & drop reassignment + undo/redo."""
+
+    def __init__(self, state: WizardState) -> None:
+        super().__init__()
+        apply_rtl(self)
+        self.state      = state
+        self.undo_stack = QUndoStack(self)
+        self.setTitle("مرحله ۴: پیش‌نمایش و ویرایش دستی")
+        self.setSubTitle(
+            "دانش‌آموز را بکشید و روی پشتیبان دیگری رها کنید.")
+
+        lay = QVBoxLayout(self)
+        # undo/redo bar
+        undo_bar = QHBoxLayout()
+        self.undo_btn = QPushButton("↩  واگرد (Ctrl+Z)")
+        self.redo_btn = QPushButton("↪  ازنو  (Ctrl+Y)")
+        self.undo_btn.setObjectName("btn_secondary")
+        self.redo_btn.setObjectName("btn_secondary")
+        self.undo_btn.clicked.connect(self.undo_stack.undo)
+        self.redo_btn.clicked.connect(self.undo_stack.redo)
+        undo_bar.addWidget(self.undo_btn)
+        undo_bar.addWidget(self.redo_btn)
+        undo_bar.addStretch()
+        lay.addLayout(undo_bar)
+
+        # count label (B8)
+        self.count_lbl = QLabel("")
+        self.count_lbl.setObjectName("lbl_muted")
+        lay.addWidget(self.count_lbl)
+
+        # feedback label (B7)
+        self.info = QLabel(
+            "یک دانش‌آموز را بکشید و روی پشتیبان دیگری رها کنید.")
+        self.info.setObjectName("lbl_muted")
+        self.info.setWordWrap(True)
+        lay.addWidget(self.info)
+
+        # tree
+        self.tree = AllocationTree()
+        self.tree.moveRequested.connect(self._on_move)
+        lay.addWidget(self.tree)
+
+        self.undo_stack.indexChanged.connect(self._update_buttons)
+
+    # ── QWizardPage API ─────────────────────────────────────────
+    def initializePage(self) -> None:  # noqa: N802
+        if self.state.result is None:
+            students, mentors = build_domain(self.state)
+            self.state.result = simulate(students, mentors,
+                                         self.state.fairness)
+        self.undo_stack.clear()
+        self.tree.load(self.state.result)
+        self._update_count_label()
+        self._update_buttons()
+
+    def validatePage(self) -> bool:  # noqa: N802
+        """Pre-execution imbalance warning before Step 5."""
+        result = self.state.result
+        if result is None:
+            return True
+        loads = result.load_per_mentor()
+        if not loads:
+            return True
+        mx, mn, cap = max(loads.values()), min(loads.values()), result.capacity
+        if mx > cap + 1 or mn < cap - 1:
+            ans = QMessageBox.warning(
+                self, "هشدار توازن",
+                f"توزیع نامتوازن است.\n"
+                f"حداکثر بار: {mx}  |  حداقل بار: {mn}  |  ظرفیت: {cap}\n"
+                "آیا ادامه می‌دهید؟",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No)
+            return ans == QMessageBox.StandardButton.Yes
+        return True
+
+    def isComplete(self) -> bool:  # noqa: N802
+        return True
+
+    # ── drop handler ────────────────────────────────────────────
+    def _on_move(self, student_idx: int,
+                 old_mentor: str, new_mentor: str) -> None:
+        result = self.state.result
+        if result is None:
+            return
+        # validation: stabilised
+        if student_idx in result.stabilized:
+            self._error("🔒 دانش‌آموز تثبیت‌شده قابل جابه‌جایی نیست.")
+            return
+        # validation: capacity
+        if len(result.assigned.get(new_mentor, [])) >= result.capacity:
+            self._error(
+                f"🔴 ظرفیت پشتیبان «{new_mentor}» تکمیل است. "
+                "انتقال لغو شد.")
+            return
+        cmd = ReassignCommand(
+            result, student_idx, old_mentor, new_mentor,
+            self._on_cmd_applied)
+        self.undo_stack.push(cmd)
+        # B7 — descriptive feedback
+        stu = result.students[student_idx]
+        name = f"{stu.first} {stu.last}".strip() or stu.counter
+        self.info.setText(
+            f"✅  {name}  از  «{old_mentor}»  به  «{new_mentor}»  "
+            "منتقل شد.")
+        self.info.setStyleSheet(f"color:{P.SUCCESS_LIGHT}")
+
+    def _on_cmd_applied(self) -> None:
+        self.tree.reload()
+        self._update_count_label()
+        if self.wizard():
+            self.wizard().refresh_status()
+
+    def _error(self, msg: str) -> None:
+        self.info.setText(msg)
+        self.info.setStyleSheet(f"color:{P.ERROR_LIGHT}")
+        self.tree.reload()
+
+    def _update_buttons(self) -> None:
+        self.undo_btn.setEnabled(self.undo_stack.canUndo())
+        self.redo_btn.setEnabled(self.undo_stack.canRedo())
+
+    def _update_count_label(self) -> None:
+        """B8 — show 'displaying X of Y students'."""
+        result = self.state.result
+        if result is None:
+            return
+        total   = result.total_students
+        showing = min(20, total)
+        self.count_lbl.setText(
+            f"نمایش {showing} از {total} دانش‌آموز")

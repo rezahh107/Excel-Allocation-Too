@@ -1,0 +1,91 @@
+"""Domain models, enums, and the shared WizardState."""
+from __future__ import annotations
+from dataclasses import dataclass, field
+from enum import Enum
+
+
+class Role(str, Enum):
+    """Logical roles a column can map to."""
+    SUPPORTER = "نام پشتیبان"
+    MANAGER   = "نام مدیر"
+    COUNTER   = "شمارنده"
+    FIRST     = "نام"
+    LAST      = "نام خانوادگی"
+    GROUP     = "نام گروه"
+    SMANAGER  = "مدیر"
+    INITIAL   = "پشتیبان"
+    NONE      = "—"
+
+
+REQUIRED_BOOK1 = {Role.SUPPORTER}
+REQUIRED_BOOK2 = {Role.INITIAL, Role.FIRST}
+
+OPTIONAL_BOOK1 = {Role.MANAGER}
+OPTIONAL_BOOK2 = {Role.COUNTER, Role.LAST, Role.GROUP, Role.SMANAGER}
+
+
+class FairnessMode(str, Enum):
+    SEQUENTIAL   = "Sequential"
+    ROUND_ROBIN  = "RoundRobin"
+    BALANCED     = "Balanced"
+
+
+@dataclass
+class Mentor:
+    name: str
+    manager: str = ""
+
+
+@dataclass
+class Student:
+    index: int
+    counter: str = ""
+    first: str = ""
+    last: str = ""
+    group: str = ""
+    manager: str = ""
+    initial_supporter: str = ""
+    final_supporter: str | None = None
+
+
+@dataclass
+class AllocationResult:
+    students:   list[Student]
+    mentors:    list[Mentor]
+    capacity:   int
+    assigned:   dict[str, list[int]] = field(default_factory=dict)
+    stabilized: set[int]             = field(default_factory=set)
+
+    @property
+    def total_students(self) -> int:
+        return len(self.students)
+
+    @property
+    def total_mentors(self) -> int:
+        return len(self.mentors)
+
+    @property
+    def num_moved(self) -> int:
+        return self.total_students - len(self.stabilized)
+
+    def load_per_mentor(self) -> dict[str, int]:
+        return {m.name: len(self.assigned.get(m.name, []))
+                for m in self.mentors}
+
+
+@dataclass
+class WizardState:
+    """Shared mutable state passed across all wizard pages."""
+    book1_path:    str = ""
+    book2_path:    str = ""
+    book1_headers: list[str]            = field(default_factory=list)
+    book1_rows:    list[dict[str, str]] = field(default_factory=list)
+    book2_headers: list[str]            = field(default_factory=list)
+    book2_rows:    list[dict[str, str]] = field(default_factory=list)
+    map1:          dict[str, Role]      = field(default_factory=dict)
+    map2:          dict[str, Role]      = field(default_factory=dict)
+    map_errors:    list[str]            = field(default_factory=list)
+    saved_map1:    dict[str, str]       = field(default_factory=dict)
+    saved_map2:    dict[str, str]       = field(default_factory=dict)
+    fairness:      FairnessMode         = FairnessMode.ROUND_ROBIN
+    result:        AllocationResult | None = None

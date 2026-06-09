@@ -1,0 +1,64 @@
+"""Colour-coded log viewer with level filters."""
+from __future__ import annotations
+from PySide6.QtGui import QColor
+from PySide6.QtWidgets import (QHBoxLayout, QListWidget, QListWidgetItem,
+                               QPushButton, QVBoxLayout, QWidget)
+
+from app.utils.theme import ColorPalette as P
+
+_COLORS = {
+    "INFO":    P.SUCCESS_LIGHT,
+    "WARNING": P.WARNING_LIGHT,
+    "ERROR":   P.ERROR_LIGHT,
+}
+
+
+class LogViewer(QWidget):
+    """Filterable, colour-coded log list."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._entries: list[tuple[str, str]] = []
+        self._filter: str | None = None
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        bar = QHBoxLayout()
+        for lvl in ("ALL", "INFO", "WARNING", "ERROR"):
+            b = QPushButton(lvl)
+            b.setObjectName("btn_secondary")
+            b.setFixedHeight(28)
+            b.clicked.connect(
+                lambda _=False, l=lvl: self._set_filter(l))
+            bar.addWidget(b)
+        bar.addStretch()
+        lay.addLayout(bar)
+        self.list = QListWidget()
+        lay.addWidget(self.list)
+
+    def add(self, level: str, message: str) -> None:
+        self._entries.append((level, message))
+        self._render_last()
+
+    def _set_filter(self, level: str) -> None:
+        self._filter = None if level == "ALL" else level
+        self._render_all()
+
+    def _render_last(self) -> None:
+        if self._entries:
+            lvl, msg = self._entries[-1]
+            if not self._filter or self._filter == lvl:
+                self._add_item(lvl, msg)
+        self.list.scrollToBottom()
+
+    def _render_all(self) -> None:
+        self.list.clear()
+        for lvl, msg in self._entries:
+            if self._filter and lvl != self._filter:
+                continue
+            self._add_item(lvl, msg)
+        self.list.scrollToBottom()
+
+    def _add_item(self, lvl: str, msg: str) -> None:
+        item = QListWidgetItem(f"[{lvl}]  {msg}")
+        item.setForeground(QColor(_COLORS.get(lvl, P.TEXT_PRIMARY)))
+        self.list.addItem(item)

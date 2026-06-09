@@ -1,0 +1,41 @@
+"""Dry-run simulation helpers."""
+from __future__ import annotations
+import copy
+
+from app.core.allocator import Allocator
+from app.core.models import AllocationResult, FairnessMode, Mentor, Student
+from app.utils.logger import get_logger
+
+log = get_logger("simulation_service")
+
+
+def simulate(students: list[Student], mentors: list[Mentor],
+             mode: FairnessMode) -> AllocationResult:
+    """Run allocation on shallow copies (does not mutate originals)."""
+    log.debug("شبیه‌سازی با حالت %s", mode.value)
+    s_copy = [copy.copy(s) for s in students]
+    return Allocator(s_copy, mentors).run(mode)
+
+
+def original_loads(students: list[Student],
+                   mentors: list[Mentor]) -> dict[str, int]:
+    """Compute raw initial load per mentor before redistribution."""
+    names = {m.name for m in mentors}
+    out: dict[str, int] = {m.name: 0 for m in mentors}
+    for s in students:
+        if s.initial_supporter in names:
+            out[s.initial_supporter] += 1
+    return out
+
+
+def imbalance_report(result: AllocationResult) -> dict[str, int | float]:
+    """Return basic imbalance metrics for the result."""
+    loads = list(result.load_per_mentor().values())
+    avg   = round(sum(loads) / max(1, len(loads)), 2)
+    return {
+        "min":      min(loads) if loads else 0,
+        "max":      max(loads) if loads else 0,
+        "avg":      avg,
+        "capacity": result.capacity,
+        "spread":   (max(loads) - min(loads)) if loads else 0,
+    }

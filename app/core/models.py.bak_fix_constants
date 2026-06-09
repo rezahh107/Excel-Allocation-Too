@@ -1,0 +1,118 @@
+"""Core data models for the allocation tool."""
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Optional
+
+
+class Role(str, Enum):
+    """Excel column roles."""
+    NONE = "بدون نقش"
+    COUNTER = "شمارنده"
+    FIRST = "نام"
+    LAST = "نام خانوادگی"
+    INITIAL_SUPPORTER = "پشتیبان اولیه"
+    MENTOR_NAME = "نام پشتیبان"
+    MANAGER_NAME = "نام مدیر"
+    CAPACITY = "ظرفیت"
+    GRADE = "پایه"
+    PHONE = "تلفن"
+
+
+class FairnessMode(str, Enum):
+    """Allocation fairness strategy."""
+    ORIGINAL = "حالت اصلی / Legacy"
+    ROUND_ROBIN = "نوبتی / Round Robin"
+    MENTOR_BALANCED = "متعادل بین پشتیبان‌ها"
+    MANAGER_BALANCED = "متعادل بین مدیرها و پشتیبان‌ها"
+
+
+@dataclass
+class Student:
+    counter: str = ""
+    first: str = ""
+    last: str = ""
+    initial_supporter: str = ""
+    grade: str = ""
+    phone: str = ""
+    raw: dict = field(default_factory=dict)
+
+    @property
+    def display_name(self) -> str:
+        name = f"{self.first} {self.last}".strip()
+        return name or self.counter or "بدون نام"
+
+
+@dataclass
+class Mentor:
+    name: str = ""
+    manager: str = ""
+    capacity: int = 0
+    raw: dict = field(default_factory=dict)
+
+
+@dataclass
+class AllocationResult:
+    students: list[Student] = field(default_factory=list)
+    mentors: list[Mentor] = field(default_factory=list)
+    capacity: int = 0
+    fairness: FairnessMode = FairnessMode.ROUND_ROBIN
+    stabilized: set[int] = field(default_factory=set)
+    assigned: dict[str, list[int]] = field(default_factory=dict)
+    num_moved: int = 0
+
+    @property
+    def total_students(self) -> int:
+        return len(self.students)
+
+    @property
+    def total_mentors(self) -> int:
+        return len(self.mentors)
+
+    def load_per_mentor(self) -> dict[str, int]:
+        return {
+            m.name: len(self.assigned.get(m.name, []))
+            for m in self.mentors
+        }
+
+    def load_per_manager(self) -> dict[str, int]:
+        totals: dict[str, int] = {}
+        for mentor in self.mentors:
+            mgr = mentor.manager or "بدون مدیر"
+            totals[mgr] = totals.get(mgr, 0) + len(
+                self.assigned.get(mentor.name, [])
+            )
+        return totals
+
+    def mentors_per_manager(self) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for mentor in self.mentors:
+            mgr = mentor.manager or "بدون مدیر"
+            counts[mgr] = counts.get(mgr, 0) + 1
+        return counts
+
+    def manager_targets(self) -> dict[str, float]:
+        total_mentors = self.total_mentors
+        if total_mentors == 0:
+            return {}
+        per_manager = self.mentors_per_manager()
+        return {
+            mgr: round(self.total_students * cnt / total_mentors, 2)
+            for mgr, cnt in per_manager.items()
+        }
+
+
+@dataclass
+class WizardState:
+    book1_path: str = ""
+    book2_path: str = ""
+    book1_rows: list[dict] = field(default_factory=list)
+    book2_rows: list[dict] = field(default_factory=list)
+    map1: dict[str, Role] = field(default_factory=dict)
+    map2: dict[str, Role] = field(default_factory=dict)
+    map_errors: list[str] = field(default_factory=list)
+    fairness: FairnessMode = FairnessMode.ROUND_ROBIN
+    capacity_override: Optional[int] = None
+    stabilize_initial: bool = True
+    result: Optional[AllocationResult] = None

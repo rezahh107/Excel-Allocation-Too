@@ -1,0 +1,87 @@
+"""Pluggable fairness strategies — Strategy pattern."""
+from __future__ import annotations
+import heapq
+from abc import ABC, abstractmethod
+
+from app.core.models import FairnessMode, Mentor
+from app.utils.logger import get_logger
+
+log = get_logger("fair_algorithm")
+
+
+class FairnessStrategy(ABC):
+    """Distribute pool students across mentors with free capacity."""
+
+    @abstractmethod
+    def distribute(self, pool: list[int], mentors: list[Mentor],
+                   remaining: dict[str, int]) -> dict[str, list[int]]:
+        """Return mapping mentor_name → [student_index, …] added."""
+
+
+class SequentialStrategy(FairnessStrategy):
+    """Legacy fill-in-order behaviour."""
+
+    def distribute(self, pool, mentors, remaining):
+        log.debug("Sequential: توزیع %d دانش‌آموز", len(pool))
+        out: dict[str, list[int]] = {m.name: [] for m in mentors}
+        for idx in pool:
+            target = next(
+                (m.name for m in mentors if remaining[m.name] > 0), None)
+            if target is None:
+                raise RuntimeError("ظرفیت کافی برای تخصیص وجود ندارد.")
+            out[target].append(idx)
+            remaining[target] -= 1
+        return out
+
+
+class RoundRobinStrategy(FairnessStrategy):
+    """Deterministic cyclic distribution — default."""
+
+    def distribute(self, pool, mentors, remaining):
+        log.debug("RoundRobin: توزیع %d دانش‌آموز", len(pool))
+        out: dict[str, list[int]] = {m.name: [] for m in mentors}
+        order = [m.name for m in mentors]
+        n, i = len(order), 0
+        for idx in pool:
+            placed = False
+            for _ in range(n):
+                name = order[i % n]
+                i += 1
+                if remaining[name] > 0:
+                    out[name].append(idx)
+                    remaining[name] -= 1
+                    placed = True
+                    break
+            if not placed:
+                raise RuntimeError("ظرفیت کافی برای تخصیص وجود ندارد.")
+        return out
+
+
+class BalancedLoadStrategy(FairnessStrategy):
+    """Minimise variance by always filling the least-loaded mentor."""
+
+    def distribute(self, pool, mentors, remaining):
+        log.debug("BalancedLoad: توزیع %d دانش‌آموز", len(pool))
+        out: dict[str, list[int]] = {m.name: [] for m in mentors}
+        heap: list[tuple[int, int, str]] = []
+        for order, m in enumerate(mentors):
+            if remaining[m.name] > 0:
+                heapq.heappush(heap, (-remaining[m.name], order, m.name))
+        for idx in pool:
+            if not heap:
+                raise RuntimeError("ظرفیت کافی برای تخصیص وجود ندارد.")
+            load, order, name = heapq.heappop(heap)
+            out[name].append(idx)
+            remaining[name] -= 1
+            if remaining[name] > 0:
+                heapq.heappush(heap, (load + 1, order, name))
+        return out
+
+
+def get_strategy(mode: FairnessMode) -> FairnessStrategy:
+    """Factory: return the concrete strategy for *mode*."""
+    return {
+        FairnessMode.SEQUENTIAL:  SequentialStrategy,
+        FairnessMode.ROUND_ROBIN: RoundRobinStrategy,
+        FairnessMode.BALANCED:    BalancedLoadStrategy,
+    }[mode]()

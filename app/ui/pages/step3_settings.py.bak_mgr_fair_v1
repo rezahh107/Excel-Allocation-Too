@@ -1,0 +1,148 @@
+"""Step 3 — fairness settings with live chart and stats panel (B4)."""
+from __future__ import annotations
+from PySide6.QtWidgets import (QButtonGroup, QGroupBox, QHBoxLayout, QLabel,
+                               QPushButton, QRadioButton, QScrollArea,
+                               QVBoxLayout, QWidget, QWizardPage)
+
+from app.core.models import FairnessMode, WizardState
+from app.services.domain_service import build_domain
+from app.services.simulation_service import imbalance_report, simulate
+from app.ui.widgets.distribution_chart import DistributionChart
+from app.ui.widgets.simulation_dialog import SimulationDialog
+from app.utils.rtl_utils import apply_rtl
+from app.utils.theme import ColorPalette as P
+
+
+class Step3Settings(QWizardPage):
+    """Allocation settings wizard page."""
+
+    def __init__(self, state: WizardState) -> None:
+        super().__init__()
+        apply_rtl(self)
+        self.state   = state
+        self._dialog: SimulationDialog | None = None
+        self.setTitle("مرحله ۳: تنظیمات و انصاف")
+        self.setSubTitle("الگوریتم توزیع را انتخاب کنید.")
+
+        inner = QWidget()
+        apply_rtl(inner)
+        lay = QVBoxLayout(inner)
+
+        # capacity label
+        self.capacity_lbl = QLabel("")
+        self.capacity_lbl.setObjectName("lbl_muted")
+        lay.addWidget(self.capacity_lbl)
+
+        # radio buttons
+        mode_grp = QGroupBox("حالت توزیع")
+        mode_lay = QVBoxLayout(mode_grp)
+        self.group = QButtonGroup(self)
+        _modes = [
+            ("Sequential  (ترتیبی — قدیمی)", FairnessMode.SEQUENTIAL),
+            ("Round Robin  (چرخشی — پیشنهادی ✓)", FairnessMode.ROUND_ROBIN),
+            ("Balanced Load  (متوازن — حداقل واریانس)", FairnessMode.BALANCED),
+        ]
+        for i, (text, mode) in enumerate(_modes):
+            rb = QRadioButton(text)
+            rb.mode = mode  # type: ignore[attr-defined]
+            if mode == self.state.fairness:
+                rb.setChecked(True)
+            rb.toggled.connect(self._on_mode)
+            self.group.addButton(rb, i)
+            mode_lay.addWidget(rb)
+        lay.addWidget(mode_grp)
+
+        # simulation button
+        btn_bar = QHBoxLayout()
+        sim_btn = QPushButton("🔬  شبیه‌سازی...")
+        sim_btn.setObjectName("btn_secondary")
+        sim_btn.clicked.connect(self.open_simulation)
+        btn_bar.addWidget(sim_btn)
+        btn_bar.addStretch()
+        lay.addLayout(btn_bar)
+
+        # stats panel + chart side by side (B4)
+        h = QHBoxLayout()
+        stats_grp = QGroupBox("آمار توزیع")
+        stats_lay = QVBoxLayout(stats_grp)
+        self.lbl_min    = QLabel("حداقل بار: —")
+        self.lbl_max    = QLabel("حداکثر بار: —")
+        self.lbl_avg    = QLabel("میانگین: —")
+        self.lbl_moved  = QLabel("جابه‌جا می‌شوند: —")
+        self.lbl_status = QLabel("")
+        self.lbl_status.setObjectName("lbl_warning")
+        self.lbl_status.setWordWrap(True)
+        for lbl in (self.lbl_min, self.lbl_max,
+                    self.lbl_avg, self.lbl_moved, self.lbl_status):
+            stats_lay.addWidget(lbl)
+        stats_lay.addStretch()
+        h.addWidget(stats_grp, 1)
+
+        chart_grp = QGroupBox("نمودار توزیع")
+        chart_lay = QVBoxLayout(chart_grp)
+        self.chart = DistributionChart()
+        chart_lay.addWidget(self.chart)
+        h.addWidget(chart_grp, 2)
+        lay.addLayout(h)
+        lay.addStretch()
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(inner)
+        outer = QVBoxLayout(self)
+        outer.addWidget(scroll)
+
+    # ── QWizardPage API ─────────────────────────────────────────
+    def initializePage(self) -> None:  # noqa: N802
+        self._refresh()
+
+    def isComplete(self) -> bool:  # noqa: N802
+        return True
+
+    # ── slots ────────────────────────────────────────────────────
+    def _on_mode(self) -> None:
+        btn = self.group.checkedButton()
+        if btn:
+            self.state.fairness = btn.mode  # type: ignore[attr-defined]
+            self._refresh()
+            if self.wizard():
+                self.wizard().refresh_status()
+
+    def _refresh(self) -> None:
+        try:
+            students, mentors = build_domain(self.state)
+        except Exception as exc:  # noqa: BLE001
+            self.capacity_lbl.setText(f"خطا: {exc}")
+            return
+        result = simulate(students, mentors, self.state.fairness)
+        self.state.result = result
+        # capacity header
+        self.capacity_lbl.setText(
+            f"دانش‌آموزان: {result.total_students}  |  "
+            f"پشتیبان‌ها: {result.total_mentors}  |  "
+            f"ظرفیت هر پشتیبان: {result.capacity}")
+        # chart (B5)
+        self.chart.update_chart(result.load_per_mentor(), result.capacity)
+        # stats panel (B4)
+        rep = imbalance_report(result)
+        self.lbl_min.setText(f"حداقل بار: {rep['min']} دانش‌آموز")
+        self.lbl_max.setText(f"حداکثر بار: {rep['max']} دانش‌آموز")
+        self.lbl_avg.setText(f"میانگین: {rep['avg']}")
+        self.lbl_moved.setText(f"جابه‌جا می‌شوند: {result.num_moved} نفر")
+        cap = result.capacity
+        if rep["max"] > cap + 1 or rep["min"] < cap - 1:
+            self.lbl_status.setText(
+                f"⚠  توزیع نامتوازن است — پراکندگی: {rep['spread']}")
+        else:
+            self.lbl_status.setText("✅  توزیع متوازن است.")
+            self.lbl_status.setStyleSheet(f"color:{P.SUCCESS_LIGHT}")
+
+    def open_simulation(self) -> None:
+        try:
+            students, mentors = build_domain(self.state)
+        except Exception as exc:  # noqa: BLE001
+            self.capacity_lbl.setText(f"خطا: {exc}")
+            return
+        self._dialog = SimulationDialog(
+            students, mentors, self.state.fairness, self)
+        self._dialog.show()

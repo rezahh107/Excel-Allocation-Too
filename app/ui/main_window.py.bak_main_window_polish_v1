@@ -1,0 +1,187 @@
+"""Application main window with Wizard and Normal modes."""
+from __future__ import annotations
+
+from PySide6.QtCore import QSettings, Qt
+from PySide6.QtWidgets import (
+    QComboBox,
+    QHBoxLayout,
+    QLabel,
+    QMainWindow,
+    QPushButton,
+    QStackedWidget,
+    QToolBar,
+    QWidget,
+)
+
+from app.ui.normal_workspace import NormalWorkspace
+from app.ui.wizard import AllocationWizard
+from app.utils.rtl_utils import apply_rtl
+from app.utils.theme import ColorPalette as P
+
+
+_ORG = "ClaudeOpus"
+_APP = "ExcelAllocationTool"
+
+
+class MainWindow(QMainWindow):
+    """Main app shell that hosts both Wizard and Normal workspace modes."""
+
+    MODE_WIZARD = 0
+    MODE_NORMAL = 1
+
+    def __init__(self) -> None:
+        super().__init__()
+        apply_rtl(self)
+
+        self.settings = QSettings(_ORG, _APP)
+
+        self.setWindowTitle("سامانه تخصیص پشتیبان · Workspace")
+        self.resize(1180, 820)
+
+        # Existing wizard is preserved as-is.
+        self.wizard = AllocationWizard()
+
+        # Normal mode reuses wizard state.
+        self.normal_workspace = NormalWorkspace(self.wizard)
+        self.normal_workspace.requestWizardMode.connect(self._open_wizard_page)
+        self.normal_workspace.requestExport.connect(self._export_from_normal)
+
+        self.stack = QStackedWidget()
+        self.stack.addWidget(self.wizard)
+        self.stack.addWidget(self.normal_workspace)
+        self.setCentralWidget(self.stack)
+
+        self._build_toolbar()
+        self._restore_window_settings()
+
+        self.stack.currentChanged.connect(self._on_mode_changed)
+
+    def _build_toolbar(self) -> None:
+        toolbar = QToolBar("Main")
+        toolbar.setMovable(False)
+        toolbar.setFloatable(False)
+        toolbar.setAllowedAreas(Qt.ToolBarArea.TopToolBarArea)
+        toolbar.setStyleSheet(
+            f"QToolBar{{background:{P.BG_SURFACE};"
+            f"border-bottom:1px solid {P.BORDER}; spacing:8px;}}"
+            f"QLabel{{color:{P.TEXT_MUTED}; padding:0 6px;}}"
+        )
+        self.addToolBar(Qt.ToolBarArea.TopToolBarArea, toolbar)
+
+        title = QLabel("حالت کاری:")
+        toolbar.addWidget(title)
+
+        self.mode_combo = QComboBox()
+        self.mode_combo.addItem("حالت ویزارد", self.MODE_WIZARD)
+        self.mode_combo.addItem("حالت عادی / Workspace", self.MODE_NORMAL)
+        self.mode_combo.currentIndexChanged.connect(self._switch_mode_from_combo)
+        toolbar.addWidget(self.mode_combo)
+
+        spacer = QWidget()
+        spacer.setMinimumWidth(20)
+        toolbar.addWidget(spacer)
+
+        self.btn_files = QPushButton("📁 فایل‌ها")
+        self.btn_mapping = QPushButton("🧩 نگاشت")
+        self.btn_settings = QPushButton("⚙ تنظیمات")
+        self.btn_preview = QPushButton("👀 پیش‌نمایش")
+        self.btn_run = QPushButton("▶ اجرا")
+        self.btn_export = QPushButton("💾 خروجی")
+
+        for btn in (
+            self.btn_files,
+            self.btn_mapping,
+            self.btn_settings,
+            self.btn_preview,
+            self.btn_export,
+        ):
+            btn.setObjectName("btn_secondary")
+            toolbar.addWidget(btn)
+
+        self.btn_run.setObjectName("btn_primary")
+        toolbar.addWidget(self.btn_run)
+
+        self.btn_files.clicked.connect(lambda: self._open_wizard_page(0))
+        self.btn_mapping.clicked.connect(lambda: self._open_wizard_page(1))
+        self.btn_settings.clicked.connect(lambda: self._open_wizard_page(2))
+        self.btn_preview.clicked.connect(lambda: self._open_wizard_page(3))
+        self.btn_run.clicked.connect(lambda: self._open_wizard_page(4))
+        self.btn_export.clicked.connect(self._export_from_normal)
+
+    def _switch_mode_from_combo(self) -> None:
+        mode = self.mode_combo.currentData()
+        if mode == self.MODE_NORMAL:
+            self.stack.setCurrentWidget(self.normal_workspace)
+            self.normal_workspace.refresh()
+        else:
+            self.stack.setCurrentWidget(self.wizard)
+
+    def _open_wizard_page(self, page_index: int) -> None:
+        """Switch to wizard mode and optionally open a specific wizard page.
+
+        page_index:
+            -1 means just switch to wizard without changing current page.
+             0..5 navigates to the respective wizard page.
+        """
+        self.stack.setCurrentWidget(self.wizard)
+
+        idx = self.mode_combo.findData(self.MODE_WIZARD)
+        if idx >= 0 and self.mode_combo.currentIndex() != idx:
+            self.mode_combo.blockSignals(True)
+            self.mode_combo.setCurrentIndex(idx)
+            self.mode_combo.blockSignals(False)
+
+        if page_index >= 0:
+            page_ids = self.wizard.pageIds()
+            if page_index < len(page_ids):
+                self.wizard.setCurrentId(page_ids[page_index])
+
+    def _export_from_normal(self) -> None:
+        """Use the existing Step6 export behaviour."""
+        if self.wizard.state.result is None:
+            self._open_wizard_page(4)
+            return
+
+        # Ensure Step6 page has current summary refreshed, then export.
+        page_ids = self.wizard.pageIds()
+        if len(page_ids) >= 6:
+            self.wizard.setCurrentId(page_ids[5])
+        self.stack.setCurrentWidget(self.wizard)
+        self.wizard.s6.export()
+
+    def _on_mode_changed(self) -> None:
+        if self.stack.currentWidget() is self.normal_workspace:
+            idx = self.mode_combo.findData(self.MODE_NORMAL)
+            self.normal_workspace.refresh()
+        else:
+            idx = self.mode_combo.findData(self.MODE_WIZARD)
+
+        if idx >= 0 and self.mode_combo.currentIndex() != idx:
+            self.mode_combo.blockSignals(True)
+            self.mode_combo.setCurrentIndex(idx)
+            self.mode_combo.blockSignals(False)
+
+    def _restore_window_settings(self) -> None:
+        geo = self.settings.value("main_window_geometry")
+        if geo:
+            self.restoreGeometry(geo)
+
+        last_mode = self.settings.value(
+            "last_mode",
+            self.MODE_WIZARD,
+            int,
+        )
+        idx = self.mode_combo.findData(last_mode)
+        if idx >= 0:
+            self.mode_combo.setCurrentIndex(idx)
+            self._switch_mode_from_combo()
+
+    def closeEvent(self, event):  # noqa: N802
+        self.settings.setValue("main_window_geometry", self.saveGeometry())
+        self.settings.setValue("last_mode", self.mode_combo.currentData())
+
+        # Preserve existing wizard settings too.
+        if hasattr(self.wizard, "_save_settings"):
+            self.wizard._save_settings()  # noqa: SLF001
+
+        super().closeEvent(event)
