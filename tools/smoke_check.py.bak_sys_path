@@ -1,0 +1,110 @@
+"""Project smoke checks.
+
+Run from project root:
+    python tools/smoke_check.py
+
+Checks:
+    - compile all Python files under app/
+    - import critical modules
+    - validate known enums
+    - instantiate key widgets where safe
+"""
+from __future__ import annotations
+
+import importlib
+import py_compile
+import sys
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+APP = ROOT / "app"
+
+
+def ok(msg: str) -> None:
+    print(f"✓ {msg}")
+
+
+def fail(msg: str) -> None:
+    print(f"✗ {msg}")
+
+
+def compile_all() -> None:
+    files = sorted(APP.rglob("*.py"))
+    for path in files:
+        py_compile.compile(str(path), doraise=True)
+    ok(f"compiled {len(files)} Python files")
+
+
+def import_module(name: str) -> None:
+    importlib.import_module(name)
+    ok(f"import {name}")
+
+
+def check_enums() -> None:
+    from app.core.models import FairnessMode, Role
+
+    required_roles = ["SMANAGER"]
+    for item in required_roles:
+        if not hasattr(Role, item):
+            raise AssertionError(f"Role.{item} missing")
+
+    required_modes = [
+        "ORIGINAL",
+        "ROUND_ROBIN",
+        "MENTOR_BALANCED",
+        "MANAGER_BALANCED",
+    ]
+    for item in required_modes:
+        if not hasattr(FairnessMode, item):
+            raise AssertionError(f"FairnessMode.{item} missing")
+
+    ok("core enums")
+
+
+def check_palette() -> None:
+    from app.utils.theme import ColorPalette as P
+
+    required = [
+        "BG_SURFACE",
+        "BORDER",
+        "TEXT_PRIMARY",
+        "TEXT_MUTED",
+        "TEXT_SECONDARY",
+        "SUCCESS_LIGHT",
+        "WARNING",
+        "ERROR",
+    ]
+    missing = [name for name in required if not hasattr(P, name)]
+    if missing:
+        raise AssertionError(f"ColorPalette missing: {missing}")
+
+    ok("ColorPalette required attributes")
+
+
+def check_widgets_import() -> None:
+    import_module("app.ui.widgets.mini_dashboard")
+    import_module("app.ui.pages.step3_settings")
+    import_module("app.ui.wizard")
+    import_module("app.ui.main_window")
+
+
+def main() -> int:
+    print("── excel_allocation_tool smoke check ─────────────────────")
+
+    try:
+        compile_all()
+        check_enums()
+        check_palette()
+        check_widgets_import()
+    except Exception as exc:
+        fail(str(exc))
+        return 1
+
+    print("──────────────────────────────────────────────────────────")
+    ok("smoke check passed")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
