@@ -1,0 +1,9 @@
+2026-06-09 10:36:11,297 | DEBUG   | font_loader | فایل فونت یافت نشد: E:\GitHub\excel_allocation_tool\resources\fonts\VazirMatn-Regular.ttf
+2026-06-09 10:36:11,297 | DEBUG   | font_loader | فایل فونت یافت نشد: E:\GitHub\excel_allocation_tool\resources\fonts\VazirMatn-Bold.ttf
+2026-06-09 10:36:11,298 | INFO    | font_loader | فونت Vazirmatn یافت نشد — Tahoma جایگزین شد.
+2026-06-09 10:36:13,645 | INFO    | wizard | تنظیمات بارگذاری شد.
+2026-06-09 10:36:13,699 | INFO    | excel_service | بارگذاری فایل: C:/Users/Nestech/Desktop/Book1.csv
+2026-06-09 10:36:13,701 | DEBUG   | parser | بارگذاری CSV: C:/Users/Nestech/Desktop/Book1.csv (75 ردیف)
+2026-06-09 10:36:13,704 | INFO    | excel_service | بارگذاری فایل: C:/Users/Nestech/Desktop/Book2.csv
+2026-06-09 10:36:13,708 | DEBUG   | parser | بارگذاری CSV: C:/Users/Nestech/Desktop/Book2.csv (346 ردیف)
+2026-06-09 10:36:19,895 | INFO    | wizard | تنظیمات ذخیره شد.

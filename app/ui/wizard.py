@@ -3,6 +3,7 @@ toast (C3), geometry persistence (C4), QSettings, project save/load."""
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 from PySide6.QtCore import QSettings, Qt
@@ -34,8 +35,12 @@ log = get_logger("wizard")
 _ORG = "ClaudeOpus"
 _APP = "ExcelAllocationTool"
 
-_CB1 = int(QWizard.WizardButton.CustomButton1)
-_CB2 = int(QWizard.WizardButton.CustomButton2)
+# Safe enum fallback for older PySide6 versions vs new
+try:
+    _CB1 = QWizard.WizardButton.CustomButton1.value
+    _CB2 = QWizard.WizardButton.CustomButton2.value
+except AttributeError:
+    _CB1, _CB2 = 6, 7
 
 
 class _Divider(QFrame):
@@ -49,15 +54,7 @@ class _Divider(QFrame):
 
 
 class AllocationWizard(QWizard):
-    """Six-step student-mentor allocation wizard.
-
-    Enhancements included:
-        C1 — persistent status bar
-        C2 — smart tooltip on Next button
-        C3 — toast notifications
-        C4 — window geometry persistence
-        C5 — project save/load (.eaproj.json)
-    """
+    """Six-step student-mentor allocation wizard."""
 
     PROJECT_FILTER = "Excel Allocation Project (*.eaproj.json);;JSON (*.json)"
 
@@ -72,65 +69,40 @@ class AllocationWizard(QWizard):
         self.setOption(QWizard.WizardOption.HaveCustomButton1, True)
         self.setOption(QWizard.WizardOption.HaveCustomButton2, True)
 
-        # ── shared state ────────────────────────────────────────
         self.settings = QSettings(_ORG, _APP)
         self.state = WizardState()
         self._load_settings()
 
-        # ── pages ───────────────────────────────────────────────
         self.s1 = Step1Load(self.state)
         self.s2 = Step2Mapping(self.state)
         self.s3 = Step3Settings(self.state)
         self.s4 = Step4Preview(self.state)
         self.s5 = Step5Execute(self.state)
         self.s6 = Step6Export(self.state)
-        for page in (
-            self.s1,
-            self.s2,
-            self.s3,
-            self.s4,
-            self.s5,
-            self.s6,
-        ):
+        for page in (self.s1, self.s2, self.s3, self.s4, self.s5, self.s6):
             self.addPage(page)
 
-        # ── custom project buttons ──────────────────────────────
-        self.setButtonText(
-            QWizard.WizardButton.CustomButton1,
-            "📂 باز کردن پروژه",
-        )
-        self.setButtonText(
-            QWizard.WizardButton.CustomButton2,
-            "💾 ذخیره پروژه",
-        )
+        self.setButtonText(QWizard.WizardButton.CustomButton1, "📂 باز کردن پروژه")
+        self.setButtonText(QWizard.WizardButton.CustomButton2, "💾 ذخیره پروژه")
 
-        # ── toast (C3) ──────────────────────────────────────────
         self.toast = Toast(self)
-
-        # ── status bar (C1) ─────────────────────────────────────
         self._build_status_bar()
-
-        # ── shortcuts ───────────────────────────────────────────
         self._setup_shortcuts()
 
-        # ── signals ─────────────────────────────────────────────
         self.currentIdChanged.connect(self._on_page_changed)
         self.helpRequested.connect(self._show_help)
         self.finished.connect(self._save_settings)
         self.customButtonClicked.connect(self._on_custom_button_clicked)
 
-        # ── restore geometry (C4) ───────────────────────────────
         geo = self.settings.value("geometry")
         if geo:
             self.restoreGeometry(geo)
 
-        # ── auto-reload previous files ──────────────────────────
         self.s1.restore_paths()
         self.refresh_status()
 
     # ── status bar (C1) ─────────────────────────────────────────
     def _build_status_bar(self) -> None:
-        """Inject a persistent status bar below the wizard buttons."""
         self._sb_students = QLabel("دانش‌آموز: —")
         self._sb_mentors = QLabel("پشتیبان: —")
         self._sb_capacity = QLabel("ظرفیت: —")
@@ -175,9 +147,7 @@ class AllocationWizard(QWizard):
         self._status_bar_widget = bar_widget
 
     def refresh_status(self) -> None:
-        """Refresh all status bar labels from current WizardState."""
         s = self.state
-
         self._sb_students.setText(
             f"دانش‌آموز: {len(s.book2_rows)}" if s.book2_rows else "دانش‌آموز: —"
         )
@@ -189,26 +159,21 @@ class AllocationWizard(QWizard):
             self._sb_capacity.setText(f"ظرفیت: {s.result.capacity}")
             self._sb_state.setText("✅  آماده خروجی")
             self._sb_state.setStyleSheet(
-                f"color:{P.SUCCESS_LIGHT};font-weight:bold;"
-                "padding:3px 8px;font-size:12px;"
+                f"color:{P.SUCCESS_LIGHT};font-weight:bold;padding:3px 8px;font-size:12px;"
             )
         elif s.book1_rows and s.book2_rows:
             self._sb_capacity.setText(
-                f"ظرفیت: {s.capacity_override}"
-                if s.capacity_override
-                else "ظرفیت: خودکار"
+                f"ظرفیت: {s.capacity_override}" if s.capacity_override else "ظرفیت: خودکار"
             )
             self._sb_state.setText("✅  فایل‌ها بارگذاری شدند")
             self._sb_state.setStyleSheet(
-                f"color:{P.SUCCESS_LIGHT};"
-                "padding:3px 8px;font-size:12px;"
+                f"color:{P.SUCCESS_LIGHT};padding:3px 8px;font-size:12px;"
             )
         else:
             self._sb_capacity.setText("ظرفیت: —")
             self._sb_state.setText("⏳  در انتظار فایل")
             self._sb_state.setStyleSheet(
-                f"color:{P.TEXT_MUTED};"
-                "padding:3px 8px;font-size:12px;"
+                f"color:{P.TEXT_MUTED};padding:3px 8px;font-size:12px;"
             )
 
         self._sb_mode.setText(f"حالت: {s.fairness.value}")
@@ -233,12 +198,7 @@ class AllocationWizard(QWizard):
 
     # ── shortcuts ───────────────────────────────────────────────
     def _setup_shortcuts(self) -> None:
-        """Register global shortcuts."""
-        QShortcut(
-            QKeySequence("Ctrl+O"),
-            self,
-            lambda: self.setCurrentId(self.pageIds()[0]),
-        )
+        QShortcut(QKeySequence("Ctrl+O"), self, lambda: self.setCurrentId(self.pageIds()[0]))
         QShortcut(QKeySequence("Ctrl+S"), self, self._global_export)
         QShortcut(QKeySequence("Ctrl+Shift+O"), self, self.open_project)
         QShortcut(QKeySequence("Ctrl+Shift+S"), self, self.save_project)
@@ -269,12 +229,8 @@ class AllocationWizard(QWizard):
             self.save_project()
 
     def _global_export(self) -> None:
-        """Trigger export from any wizard page."""
         if self.state.result is None:
-            self.toast.show_message(
-                "ابتدا تخصیص را اجرا کنید (مرحله ۵).",
-                "warning",
-            )
+            self.toast.show_message("ابتدا تخصیص را اجرا کنید (مرحله ۵).", "warning")
             return
         self.s6.export()
 
@@ -295,13 +251,10 @@ class AllocationWizard(QWizard):
 
     # ── project save/load (C5) ──────────────────────────────────
     def save_project(self) -> None:
-        """Save current wizard working state to a JSON project file."""
+        """Save current wizard working state to a JSON project file atomically."""
         suggested = self._default_project_path()
         path, _ = QFileDialog.getSaveFileName(
-            self,
-            "ذخیره پروژه",
-            suggested,
-            self.PROJECT_FILTER,
+            self, "ذخیره پروژه", suggested, self.PROJECT_FILTER
         )
         if not path:
             return
@@ -310,8 +263,11 @@ class AllocationWizard(QWizard):
         payload = self._build_project_payload()
 
         try:
-            with open(path, "w", encoding="utf-8") as fh:
+            tmp_path = path + ".tmp"
+            with open(tmp_path, "w", encoding="utf-8") as fh:
                 json.dump(payload, fh, ensure_ascii=False, indent=2)
+            
+            os.replace(tmp_path, path)
 
             self.settings.setValue("last_project_path", path)
             self.toast.show_message("پروژه ذخیره شد.", "success")
@@ -319,9 +275,7 @@ class AllocationWizard(QWizard):
         except Exception as exc:
             log.exception("خطا در ذخیره پروژه: %s", exc)
             QMessageBox.critical(
-                self,
-                "خطا در ذخیره پروژه",
-                f"ذخیره پروژه ناموفق بود:\n{exc}",
+                self, "خطا در ذخیره پروژه", f"ذخیره پروژه ناموفق بود:\n{exc}"
             )
 
     def open_project(self) -> None:
@@ -338,15 +292,10 @@ class AllocationWizard(QWizard):
                 return
 
         start_dir = self.settings.value(
-            "last_project_path",
-            self._default_project_path(),
-            str,
+            "last_project_path", self._default_project_path(), str
         )
         path, _ = QFileDialog.getOpenFileName(
-            self,
-            "باز کردن پروژه",
-            start_dir,
-            self.PROJECT_FILTER,
+            self, "باز کردن پروژه", start_dir, self.PROJECT_FILTER
         )
         if not path:
             return
@@ -371,13 +320,10 @@ class AllocationWizard(QWizard):
         except Exception as exc:
             log.exception("خطا در باز کردن پروژه: %s", exc)
             QMessageBox.critical(
-                self,
-                "خطا در باز کردن پروژه",
-                f"بارگذاری پروژه ناموفق بود:\n{exc}",
+                self, "خطا در باز کردن پروژه", f"بارگذاری پروژه ناموفق بود:\n{exc}"
             )
 
     def _build_project_payload(self) -> dict:
-        """Create a JSON-serialisable project snapshot."""
         current_step_index = 0
         try:
             current_step_index = self.pageIds().index(self.currentId())
@@ -397,22 +343,21 @@ class AllocationWizard(QWizard):
         }
 
     def _apply_project_payload(self, data: dict) -> None:
-        """Apply loaded JSON state into the running wizard safely."""
         self.state.book1_path = str(data.get("book1_path", "") or "")
         self.state.book2_path = str(data.get("book2_path", "") or "")
 
         raw_map1 = data.get("map1", {})
         raw_map2 = data.get("map2", {})
+        self.state.map1 = self._decode_role_map(raw_map1 if isinstance(raw_map1, dict) else {})
+        self.state.map2 = self._decode_role_map(raw_map2 if isinstance(raw_map2, dict) else {})
 
-        self.state.saved_map1 = raw_map1 if isinstance(raw_map1, dict) else {}
-        self.state.saved_map2 = raw_map2 if isinstance(raw_map2, dict) else {}
+        # Restore backwards compatibility for _load_settings flow
+        if hasattr(self.state, "saved_map1"):
+            self.state.saved_map1 = raw_map1 if isinstance(raw_map1, dict) else {}
+        if hasattr(self.state, "saved_map2"):
+            self.state.saved_map2 = raw_map2 if isinstance(raw_map2, dict) else {}
 
-        self.state.map1 = self._decode_role_map(self.state.saved_map1)
-        self.state.map2 = self._decode_role_map(self.state.saved_map2)
-
-        fairness_value = str(
-            data.get("fairness", FairnessMode.ROUND_ROBIN.value) or ""
-        )
+        fairness_value = str(data.get("fairness", FairnessMode.ROUND_ROBIN.value) or "")
         try:
             self.state.fairness = FairnessMode(fairness_value)
         except ValueError:
@@ -427,10 +372,7 @@ class AllocationWizard(QWizard):
             except (TypeError, ValueError):
                 self.state.capacity_override = None
 
-        self.state.stabilize_initial = bool(
-            data.get("stabilize_initial", True)
-        )
-
+        self.state.stabilize_initial = bool(data.get("stabilize_initial", True))
         self.state.result = None
         self.state.map_errors = []
 
@@ -452,7 +394,6 @@ class AllocationWizard(QWizard):
                 log.debug("عدم امکان رفتن به مرحله ذخیره‌شده: %s", exc)
 
     def _reload_rows_from_paths(self) -> None:
-        """Reload Book1 / Book2 rows from saved file paths if possible."""
         try:
             from app.services.excel_service import load_table
         except Exception as exc:
@@ -468,24 +409,18 @@ class AllocationWizard(QWizard):
                 return []
             try:
                 rows = load_table(path)
-                log.info("%s پروژه بارگذاری شد: %s", label, path)
                 return rows if isinstance(rows, list) else []
             except Exception as exc:
                 warnings.append(f"{label}: {exc}")
-                log.warning("خطا در بارگذاری %s از پروژه: %s", label, exc)
                 return []
 
         self.state.book1_rows = _load(self.state.book1_path, "Book1")
         self.state.book2_rows = _load(self.state.book2_path, "Book2")
 
         if warnings:
-            self.toast.show_message(
-                "بخشی از فایل‌های پروژه دوباره بارگذاری نشدند.",
-                "warning",
-            )
+            self.toast.show_message("بخشی از فایل‌های پروژه بارگذاری نشدند.", "warning")
 
     def _sync_pages_from_state(self) -> None:
-        """Synchronise visible page widgets after opening a project."""
         try:
             if hasattr(self.s1, "restore_paths"):
                 self.s1.restore_paths()
@@ -526,15 +461,12 @@ class AllocationWizard(QWizard):
         last_book = self.state.book2_path or self.state.book1_path
         if not last_book:
             return "allocation_project.eaproj.json"
-
         p = Path(last_book)
         return str(p.with_name(f"{p.stem}.eaproj.json"))
 
     @staticmethod
     def _normalise_project_path(path: str) -> str:
         p = Path(path)
-        if p.suffix.lower() != ".json":
-            return str(p.with_suffix(".eaproj.json"))
         if not p.name.lower().endswith(".eaproj.json"):
             return str(p.with_name(f"{p.stem}.eaproj.json"))
         return str(p)
@@ -592,16 +524,21 @@ class AllocationWizard(QWizard):
 
     # ── QSettings persistence ────────────────────────────────────
     def _load_settings(self) -> None:
-        """Restore file paths, mappings, fairness mode from disk."""
         self.state.book1_path = self.settings.value("last_book1", "", str)
         self.state.book2_path = self.settings.value("last_book2", "", str)
-        self.state.saved_map1 = self._load_json("map1_json")
-        self.state.saved_map2 = self._load_json("map2_json")
-        mode = self.settings.value(
-            "fairness",
-            FairnessMode.ROUND_ROBIN.value,
-            str,
-        )
+        
+        raw_map1 = self._load_json("map1_json")
+        raw_map2 = self._load_json("map2_json")
+        self.state.map1 = self._decode_role_map(raw_map1)
+        self.state.map2 = self._decode_role_map(raw_map2)
+        
+        # Backward compatibility for the original attributes
+        if hasattr(self.state, "saved_map1"):
+            self.state.saved_map1 = raw_map1
+        if hasattr(self.state, "saved_map2"):
+            self.state.saved_map2 = raw_map2
+
+        mode = self.settings.value("fairness", FairnessMode.ROUND_ROBIN.value, str)
         try:
             self.state.fairness = FairnessMode(mode)
         except ValueError:
@@ -618,21 +555,18 @@ class AllocationWizard(QWizard):
             return {}
 
     def _save_settings(self) -> None:
-        """Persist file paths, mappings, fairness mode and geometry."""
         self.settings.setValue("last_book1", self.state.book1_path)
         self.settings.setValue("last_book2", self.state.book2_path)
         self.settings.setValue(
             "map1_json",
             json.dumps(
-                {c: r.value for c, r in self.state.map1.items()},
-                ensure_ascii=False,
+                {c: r.value for c, r in self.state.map1.items()}, ensure_ascii=False
             ),
         )
         self.settings.setValue(
             "map2_json",
             json.dumps(
-                {c: r.value for c, r in self.state.map2.items()},
-                ensure_ascii=False,
+                {c: r.value for c, r in self.state.map2.items()}, ensure_ascii=False
             ),
         )
         self.settings.setValue("fairness", self.state.fairness.value)
