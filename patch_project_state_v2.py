@@ -1,0 +1,694 @@
+"""Patch: Project State Save/Load v2 for AllocationWizard.
+
+Safer than v1:
+    - customButtonClicked(int) handled correctly
+    - undo/redo guarded
+    - default project path uses pathlib
+    - project version validation
+    - confirmation before overwriting current in-memory state
+    - safer Step3 sync
+
+Run:
+    python patch_project_state_v2.py
+    python tools/smoke_check.py
+    python -m app.main
+"""
+from __future__ import annotations
+
+import py_compile
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parent
+TARGET = ROOT / "app" / "ui" / "wizard.py"
+
+
+NEW_CODE = '''"""Main wizard window — status bar (C1), tooltips (C2),
+toast (C3), geometry persistence (C4), QSettings, project save/load."""
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+from PySide6.QtCore import QSettings, Qt
+from PySide6.QtGui import QKeySequence, QShortcut
+from PySide6.QtWidgets import (
+    QFileDialog,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QMessageBox,
+    QWidget,
+    QWizard,
+)
+
+from app.core.models import FairnessMode, Role, WizardState
+from app.ui.pages.step1_load import Step1Load
+from app.ui.pages.step2_mapping import Step2Mapping
+from app.ui.pages.step3_settings import Step3Settings
+from app.ui.pages.step4_preview import Step4Preview
+from app.ui.pages.step5_execute import Step5Execute
+from app.ui.pages.step6_export import Step6Export
+from app.ui.widgets.toast import Toast
+from app.utils.logger import get_logger
+from app.utils.rtl_utils import apply_rtl
+from app.utils.theme import ColorPalette as P
+
+log = get_logger("wizard")
+
+_ORG = "ClaudeOpus"
+_APP = "ExcelAllocationTool"
+
+_CB1 = int(QWizard.WizardButton.CustomButton1)
+_CB2 = int(QWizard.WizardButton.CustomButton2)
+
+
+class _Divider(QFrame):
+    """Thin vertical separator for the status bar."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.setFrameShape(QFrame.Shape.VLine)
+        self.setFixedWidth(1)
+        self.setStyleSheet(f"color:{P.SEPARATOR}")
+
+
+class AllocationWizard(QWizard):
+    """Six-step student-mentor allocation wizard.
+
+    Enhancements included:
+        C1 — persistent status bar
+        C2 — smart tooltip on Next button
+        C3 — toast notifications
+        C4 — window geometry persistence
+        C5 — project save/load (.eaproj.json)
+    """
+
+    PROJECT_FILTER = "Excel Allocation Project (*.eaproj.json);;JSON (*.json)"
+
+    def __init__(self) -> None:
+        super().__init__()
+        apply_rtl(self)
+        self.setWindowTitle("سامانه تخصیص پشتیبان  ·  v3.0")
+        self.setWizardStyle(QWizard.WizardStyle.ModernStyle)
+        self.resize(1020, 780)
+        self.setOption(QWizard.WizardOption.IndependentPages, False)
+        self.setOption(QWizard.WizardOption.HaveHelpButton, True)
+        self.setOption(QWizard.WizardOption.HaveCustomButton1, True)
+        self.setOption(QWizard.WizardOption.HaveCustomButton2, True)
+
+        # ── shared state ────────────────────────────────────────
+        self.settings = QSettings(_ORG, _APP)
+        self.state = WizardState()
+        self._load_settings()
+
+        # ── pages ───────────────────────────────────────────────
+        self.s1 = Step1Load(self.state)
+        self.s2 = Step2Mapping(self.state)
+        self.s3 = Step3Settings(self.state)
+        self.s4 = Step4Preview(self.state)
+        self.s5 = Step5Execute(self.state)
+        self.s6 = Step6Export(self.state)
+        for page in (
+            self.s1,
+            self.s2,
+            self.s3,
+            self.s4,
+            self.s5,
+            self.s6,
+        ):
+            self.addPage(page)
+
+        # ── custom project buttons ──────────────────────────────
+        self.setButtonText(
+            QWizard.WizardButton.CustomButton1,
+            "📂 باز کردن پروژه",
+        )
+        self.setButtonText(
+            QWizard.WizardButton.CustomButton2,
+            "💾 ذخیره پروژه",
+        )
+
+        # ── toast (C3) ──────────────────────────────────────────
+        self.toast = Toast(self)
+
+        # ── status bar (C1) ─────────────────────────────────────
+        self._build_status_bar()
+
+        # ── shortcuts ───────────────────────────────────────────
+        self._setup_shortcuts()
+
+        # ── signals ─────────────────────────────────────────────
+        self.currentIdChanged.connect(self._on_page_changed)
+        self.helpRequested.connect(self._show_help)
+        self.finished.connect(self._save_settings)
+        self.customButtonClicked.connect(self._on_custom_button_clicked)
+
+        # ── restore geometry (C4) ───────────────────────────────
+        geo = self.settings.value("geometry")
+        if geo:
+            self.restoreGeometry(geo)
+
+        # ── auto-reload previous files ──────────────────────────
+        self.s1.restore_paths()
+        self.refresh_status()
+
+    # ── status bar (C1) ─────────────────────────────────────────
+    def _build_status_bar(self) -> None:
+        """Inject a persistent status bar below the wizard buttons."""
+        self._sb_students = QLabel("دانش‌آموز: —")
+        self._sb_mentors = QLabel("پشتیبان: —")
+        self._sb_capacity = QLabel("ظرفیت: —")
+        self._sb_mode = QLabel("حالت: —")
+        self._sb_state = QLabel("⏳ در انتظار فایل")
+
+        bar_widget = QWidget()
+        bar_widget.setObjectName("statusBar")
+        bar_widget.setStyleSheet(
+            f"""
+            QWidget#statusBar {{
+                background-color: {P.BG_SURFACE};
+                border: 0;
+                border-top: 1px solid {P.BORDER};
+            }}
+            QWidget#statusBar QLabel {{
+                color: {P.TEXT_MUTED};
+                padding: 3px 8px;
+                font-size: 12px;
+                background: transparent;
+                border: 0;
+            }}
+            """
+        )
+        h = QHBoxLayout(bar_widget)
+        h.setContentsMargins(8, 2, 8, 2)
+        h.setSpacing(0)
+        for lbl in (
+            self._sb_students,
+            self._sb_mentors,
+            self._sb_capacity,
+            self._sb_mode,
+            self._sb_state,
+        ):
+            h.addWidget(lbl)
+            h.addWidget(_Divider())
+        h.addStretch()
+
+        main_layout = self.layout()
+        if main_layout:
+            main_layout.addWidget(bar_widget)
+        self._status_bar_widget = bar_widget
+
+    def refresh_status(self) -> None:
+        """Refresh all status bar labels from current WizardState."""
+        s = self.state
+
+        self._sb_students.setText(
+            f"دانش‌آموز: {len(s.book2_rows)}" if s.book2_rows else "دانش‌آموز: —"
+        )
+        self._sb_mentors.setText(
+            f"پشتیبان: {len(s.book1_rows)}" if s.book1_rows else "پشتیبان: —"
+        )
+
+        if s.result:
+            self._sb_capacity.setText(f"ظرفیت: {s.result.capacity}")
+            self._sb_state.setText("✅  آماده خروجی")
+            self._sb_state.setStyleSheet(
+                f"color:{P.SUCCESS_LIGHT};font-weight:bold;"
+                "padding:3px 8px;font-size:12px;"
+            )
+        elif s.book1_rows and s.book2_rows:
+            self._sb_capacity.setText(
+                f"ظرفیت: {s.capacity_override}"
+                if s.capacity_override
+                else "ظرفیت: خودکار"
+            )
+            self._sb_state.setText("✅  فایل‌ها بارگذاری شدند")
+            self._sb_state.setStyleSheet(
+                f"color:{P.SUCCESS_LIGHT};"
+                "padding:3px 8px;font-size:12px;"
+            )
+        else:
+            self._sb_capacity.setText("ظرفیت: —")
+            self._sb_state.setText("⏳  در انتظار فایل")
+            self._sb_state.setStyleSheet(
+                f"color:{P.TEXT_MUTED};"
+                "padding:3px 8px;font-size:12px;"
+            )
+
+        self._sb_mode.setText(f"حالت: {s.fairness.value}")
+
+    # ── smart tooltip on Next (C2) ──────────────────────────────
+    def _on_page_changed(self, page_id: int) -> None:
+        page = self.currentPage()
+        next_btn = self.button(QWizard.WizardButton.NextButton)
+        if next_btn is None or page is None:
+            return
+        if not page.isComplete():
+            reason = getattr(
+                page,
+                "incomplete_reason",
+                lambda: "این مرحله هنوز کامل نشده است",
+            )()
+            next_btn.setToolTip(f"⚠  {reason}")
+        else:
+            next_btn.setToolTip("")
+        if hasattr(self, "toast"):
+            self.toast.hide()
+
+    # ── shortcuts ───────────────────────────────────────────────
+    def _setup_shortcuts(self) -> None:
+        """Register global shortcuts."""
+        QShortcut(
+            QKeySequence("Ctrl+O"),
+            self,
+            lambda: self.setCurrentId(self.pageIds()[0]),
+        )
+        QShortcut(QKeySequence("Ctrl+S"), self, self._global_export)
+        QShortcut(QKeySequence("Ctrl+Shift+O"), self, self.open_project)
+        QShortcut(QKeySequence("Ctrl+Shift+S"), self, self.save_project)
+        QShortcut(QKeySequence("Ctrl+Z"), self, self._safe_undo)
+        QShortcut(QKeySequence("Ctrl+Y"), self, self._safe_redo)
+        QShortcut(QKeySequence("F1"), self, self._show_help)
+
+    def _safe_undo(self) -> None:
+        stack = getattr(self.s4, "undo_stack", None)
+        if stack is not None and hasattr(stack, "undo"):
+            try:
+                stack.undo()
+            except Exception as exc:
+                log.debug("undo ناموفق بود: %s", exc)
+
+    def _safe_redo(self) -> None:
+        stack = getattr(self.s4, "undo_stack", None)
+        if stack is not None and hasattr(stack, "redo"):
+            try:
+                stack.redo()
+            except Exception as exc:
+                log.debug("redo ناموفق بود: %s", exc)
+
+    def _on_custom_button_clicked(self, which: int) -> None:
+        if which == _CB1:
+            self.open_project()
+        elif which == _CB2:
+            self.save_project()
+
+    def _global_export(self) -> None:
+        """Trigger export from any wizard page."""
+        if self.state.result is None:
+            self.toast.show_message(
+                "ابتدا تخصیص را اجرا کنید (مرحله ۵).",
+                "warning",
+            )
+            return
+        self.s6.export()
+
+    def _show_help(self) -> None:
+        QMessageBox.information(
+            self,
+            "راهنما",
+            "━━━━━━━━━━━━━━━━━━━━━━━━\\n"
+            "  Ctrl+O         بارگذاری فایل‌ها (مرحله ۱)\\n"
+            "  Ctrl+S         خروجی گرفتن (از هر صفحه)\\n"
+            "  Ctrl+Shift+O   باز کردن پروژه\\n"
+            "  Ctrl+Shift+S   ذخیره پروژه\\n"
+            "  Ctrl+Z         واگرد (مرحله ۴)\\n"
+            "  Ctrl+Y         ازنو  (مرحله ۴)\\n"
+            "  F1             این راهنما\\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━"
+        )
+
+    # ── project save/load (C5) ──────────────────────────────────
+    def save_project(self) -> None:
+        """Save current wizard working state to a JSON project file."""
+        suggested = self._default_project_path()
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "ذخیره پروژه",
+            suggested,
+            self.PROJECT_FILTER,
+        )
+        if not path:
+            return
+
+        path = self._normalise_project_path(path)
+        payload = self._build_project_payload()
+
+        try:
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump(payload, fh, ensure_ascii=False, indent=2)
+
+            self.settings.setValue("last_project_path", path)
+            self.toast.show_message("پروژه ذخیره شد.", "success")
+            log.info("پروژه ذخیره شد: %s", path)
+        except Exception as exc:
+            log.exception("خطا در ذخیره پروژه: %s", exc)
+            QMessageBox.critical(
+                self,
+                "خطا در ذخیره پروژه",
+                f"ذخیره پروژه ناموفق بود:\\n{exc}",
+            )
+
+    def open_project(self) -> None:
+        """Open a previously saved project JSON file."""
+        if self._has_meaningful_state():
+            reply = QMessageBox.question(
+                self,
+                "باز کردن پروژه",
+                "وضعیت فعلی جایگزین خواهد شد. ادامه می‌دهید؟",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+
+        start_dir = self.settings.value(
+            "last_project_path",
+            self._default_project_path(),
+            str,
+        )
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "باز کردن پروژه",
+            start_dir,
+            self.PROJECT_FILTER,
+        )
+        if not path:
+            return
+
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+
+            if not isinstance(data, dict):
+                raise ValueError("ساختار فایل پروژه معتبر نیست.")
+
+            version = self._project_version(data)
+            if version > 2:
+                log.warning("نسخه فایل پروژه جدیدتر از این برنامه است: %s", version)
+            elif version < 1:
+                raise ValueError("نسخه فایل پروژه معتبر نیست.")
+
+            self._apply_project_payload(data)
+            self.settings.setValue("last_project_path", path)
+            self.toast.show_message("پروژه بارگذاری شد.", "success")
+            log.info("پروژه بارگذاری شد: %s", path)
+        except Exception as exc:
+            log.exception("خطا در باز کردن پروژه: %s", exc)
+            QMessageBox.critical(
+                self,
+                "خطا در باز کردن پروژه",
+                f"بارگذاری پروژه ناموفق بود:\\n{exc}",
+            )
+
+    def _build_project_payload(self) -> dict:
+        """Create a JSON-serialisable project snapshot."""
+        current_step_index = 0
+        try:
+            current_step_index = self.pageIds().index(self.currentId())
+        except ValueError:
+            current_step_index = 0
+
+        return {
+            "version": 2,
+            "book1_path": self.state.book1_path,
+            "book2_path": self.state.book2_path,
+            "map1": self._encode_role_map(self.state.map1),
+            "map2": self._encode_role_map(self.state.map2),
+            "fairness": self.state.fairness.value,
+            "capacity_override": self.state.capacity_override,
+            "stabilize_initial": bool(self.state.stabilize_initial),
+            "current_step_index": current_step_index,
+        }
+
+    def _apply_project_payload(self, data: dict) -> None:
+        """Apply loaded JSON state into the running wizard safely."""
+        self.state.book1_path = str(data.get("book1_path", "") or "")
+        self.state.book2_path = str(data.get("book2_path", "") or "")
+
+        raw_map1 = data.get("map1", {})
+        raw_map2 = data.get("map2", {})
+
+        self.state.saved_map1 = raw_map1 if isinstance(raw_map1, dict) else {}
+        self.state.saved_map2 = raw_map2 if isinstance(raw_map2, dict) else {}
+
+        self.state.map1 = self._decode_role_map(self.state.saved_map1)
+        self.state.map2 = self._decode_role_map(self.state.saved_map2)
+
+        fairness_value = str(
+            data.get("fairness", FairnessMode.ROUND_ROBIN.value) or ""
+        )
+        try:
+            self.state.fairness = FairnessMode(fairness_value)
+        except ValueError:
+            self.state.fairness = FairnessMode.ROUND_ROBIN
+
+        cap = data.get("capacity_override", None)
+        if cap in ("", None):
+            self.state.capacity_override = None
+        else:
+            try:
+                self.state.capacity_override = int(cap)
+            except (TypeError, ValueError):
+                self.state.capacity_override = None
+
+        self.state.stabilize_initial = bool(
+            data.get("stabilize_initial", True)
+        )
+
+        self.state.result = None
+        self.state.map_errors = []
+
+        self._reload_rows_from_paths()
+        self._sync_pages_from_state()
+        self.refresh_status()
+
+        step_index = data.get("current_step_index", 0)
+        try:
+            step_index = int(step_index)
+        except (TypeError, ValueError):
+            step_index = 0
+
+        page_ids = self.pageIds()
+        if 0 <= step_index < len(page_ids):
+            try:
+                self.setCurrentId(page_ids[step_index])
+            except Exception as exc:
+                log.debug("عدم امکان رفتن به مرحله ذخیره‌شده: %s", exc)
+
+    def _reload_rows_from_paths(self) -> None:
+        """Reload Book1 / Book2 rows from saved file paths if possible."""
+        try:
+            from app.services.excel_service import load_table
+        except Exception as exc:
+            log.warning("load_table در دسترس نیست: %s", exc)
+            self.state.book1_rows = []
+            self.state.book2_rows = []
+            return
+
+        warnings: list[str] = []
+
+        def _load(path: str, label: str) -> list[dict]:
+            if not path:
+                return []
+            try:
+                rows = load_table(path)
+                log.info("%s پروژه بارگذاری شد: %s", label, path)
+                return rows if isinstance(rows, list) else []
+            except Exception as exc:
+                warnings.append(f"{label}: {exc}")
+                log.warning("خطا در بارگذاری %s از پروژه: %s", label, exc)
+                return []
+
+        self.state.book1_rows = _load(self.state.book1_path, "Book1")
+        self.state.book2_rows = _load(self.state.book2_path, "Book2")
+
+        if warnings:
+            self.toast.show_message(
+                "بخشی از فایل‌های پروژه دوباره بارگذاری نشدند.",
+                "warning",
+            )
+
+    def _sync_pages_from_state(self) -> None:
+        """Synchronise visible page widgets after opening a project."""
+        try:
+            if hasattr(self.s1, "restore_paths"):
+                self.s1.restore_paths()
+        except Exception as exc:
+            log.debug("restore_paths ناموفق بود: %s", exc)
+
+        try:
+            if hasattr(self.s3, "sync_from_state"):
+                self.s3.sync_from_state()
+            else:
+                idx = self.s3.fairness_combo.findData(self.state.fairness)
+                if idx >= 0:
+                    self.s3.fairness_combo.setCurrentIndex(idx)
+
+                is_auto = self.state.capacity_override is None
+                self.s3.auto_capacity.setChecked(is_auto)
+
+                if self.state.capacity_override is not None:
+                    self.s3.capacity_spin.setValue(self.state.capacity_override)
+
+                self.s3.capacity_spin.setEnabled(not is_auto)
+                self.s3.stabilize_chk.setChecked(self.state.stabilize_initial)
+
+                if hasattr(self.s3, "_update_fairness_desc"):
+                    self.s3._update_fairness_desc()
+                if hasattr(self.s3, "_refresh_dashboard"):
+                    self.s3._refresh_dashboard()
+        except Exception as exc:
+            log.debug("همگام‌سازی Step3 ناموفق بود: %s", exc)
+
+        for page in (self.s2, self.s4, self.s5, self.s6):
+            try:
+                page.completeChanged.emit()
+            except Exception:
+                pass
+
+    def _default_project_path(self) -> str:
+        last_book = self.state.book2_path or self.state.book1_path
+        if not last_book:
+            return "allocation_project.eaproj.json"
+
+        p = Path(last_book)
+        return str(p.with_name(f"{p.stem}.eaproj.json"))
+
+    @staticmethod
+    def _normalise_project_path(path: str) -> str:
+        p = Path(path)
+        if p.suffix.lower() != ".json":
+            return str(p.with_suffix(".eaproj.json"))
+        if not p.name.lower().endswith(".eaproj.json"):
+            return str(p.with_name(f"{p.stem}.eaproj.json"))
+        return str(p)
+
+    @staticmethod
+    def _project_version(data: dict) -> int:
+        try:
+            return int(data.get("version", 1))
+        except (TypeError, ValueError):
+            return 1
+
+    def _has_meaningful_state(self) -> bool:
+        return any(
+            [
+                bool(self.state.book1_path),
+                bool(self.state.book2_path),
+                bool(self.state.book1_rows),
+                bool(self.state.book2_rows),
+                bool(self.state.map1),
+                bool(self.state.map2),
+                self.state.result is not None,
+            ]
+        )
+
+    @staticmethod
+    def _encode_role_map(data: dict) -> dict[str, str]:
+        out: dict[str, str] = {}
+        for col, role in (data or {}).items():
+            key = str(col)
+            try:
+                out[key] = role.value
+            except Exception:
+                out[key] = str(role)
+        return out
+
+    @staticmethod
+    def _decode_role_map(data: dict) -> dict[str, Role]:
+        out: dict[str, Role] = {}
+        if not isinstance(data, dict):
+            return out
+        for col, raw in data.items():
+            try:
+                out[str(col)] = Role(str(raw))
+            except ValueError:
+                continue
+        return out
+
+    # ── resize toast on window resize ───────────────────────────
+    def resizeEvent(self, e):  # noqa: N802
+        super().resizeEvent(e)
+        if hasattr(self, "toast") and self.toast.isVisible():
+            x = self.width() - self.toast.width() - 20
+            y = self.height() - self.toast.height() - 55
+            self.toast.move(x, y)
+
+    # ── QSettings persistence ────────────────────────────────────
+    def _load_settings(self) -> None:
+        """Restore file paths, mappings, fairness mode from disk."""
+        self.state.book1_path = self.settings.value("last_book1", "", str)
+        self.state.book2_path = self.settings.value("last_book2", "", str)
+        self.state.saved_map1 = self._load_json("map1_json")
+        self.state.saved_map2 = self._load_json("map2_json")
+        mode = self.settings.value(
+            "fairness",
+            FairnessMode.ROUND_ROBIN.value,
+            str,
+        )
+        try:
+            self.state.fairness = FairnessMode(mode)
+        except ValueError:
+            self.state.fairness = FairnessMode.ROUND_ROBIN
+        log.info("تنظیمات بارگذاری شد.")
+
+    def _load_json(self, key: str) -> dict[str, str]:
+        raw = self.settings.value(key, "", str)
+        if not raw:
+            return {}
+        try:
+            return dict(json.loads(raw))
+        except (ValueError, TypeError):
+            return {}
+
+    def _save_settings(self) -> None:
+        """Persist file paths, mappings, fairness mode and geometry."""
+        self.settings.setValue("last_book1", self.state.book1_path)
+        self.settings.setValue("last_book2", self.state.book2_path)
+        self.settings.setValue(
+            "map1_json",
+            json.dumps(
+                {c: r.value for c, r in self.state.map1.items()},
+                ensure_ascii=False,
+            ),
+        )
+        self.settings.setValue(
+            "map2_json",
+            json.dumps(
+                {c: r.value for c, r in self.state.map2.items()},
+                ensure_ascii=False,
+            ),
+        )
+        self.settings.setValue("fairness", self.state.fairness.value)
+        self.settings.setValue("geometry", self.saveGeometry())
+        log.info("تنظیمات ذخیره شد.")
+'''
+
+
+def main() -> None:
+    if not TARGET.exists():
+        raise FileNotFoundError(TARGET)
+
+    old = TARGET.read_text(encoding="utf-8")
+
+    backup = TARGET.with_suffix(".py.bak_project_state_v2")
+    if not backup.exists():
+        backup.write_text(old, encoding="utf-8")
+        print(f"✓ backup: {backup.relative_to(ROOT)}")
+    else:
+        print(f"• backup exists: {backup.relative_to(ROOT)}")
+
+    TARGET.write_text(NEW_CODE, encoding="utf-8")
+    py_compile.compile(str(TARGET), doraise=True)
+
+    print("✓ wizard.py replaced with Project State Save/Load v2")
+    print("✓ syntax check passed")
+    print()
+    print("Run:")
+    print("    python tools\\\\smoke_check.py")
+    print("    python -m app.main")
+
+
+if __name__ == "__main__":
+    main()
