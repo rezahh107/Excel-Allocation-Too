@@ -48,18 +48,24 @@ def export_excel(result: AllocationResult,
                  mentor_manager: dict[str, str],
                  out_path: str) -> None:
     """Write the final assignment workbook (data + statistics sheets)."""
+    result.assert_approved()
     log.info("خروجی Excel: %s", out_path)
     wb = Workbook()
     ws = wb.active
     ws.title = "جدول نهایی دانش‌آموزان"
     ws.sheet_view.rightToLeft = True
     ws.append(HEADERS)
-    for s in result.students:
+    for i, s in enumerate(result.students):
+        final_mentor = result.mentor_for_student(i)
         ws.append([
             s.counter, s.first, s.last, s.group, s.manager,
-            s.initial_supporter, s.final_supporter,
-            mentor_manager.get(s.final_supporter or "", ""),
+            s.initial_supporter, final_mentor,
+            mentor_manager.get(final_mentor, ""),
         ])
+        # Spreadsheet-looking identifiers and text must never become formulas.
+        for cell in ws[ws.max_row]:
+            if isinstance(cell.value, str):
+                cell.data_type = "s"
     ws2 = wb.create_sheet("گزارش آماری")
     ws2.sheet_view.rightToLeft = True
     ws2.append(["عنوان", "مقدار"])
@@ -87,19 +93,20 @@ def _stats_list(result: AllocationResult) -> list[tuple[str, int | float]]:
 
 def export_html_report(result: AllocationResult, out_path: str) -> None:
     """Generate an interactive HTML report with chart + search."""
+    result.assert_approved()
     log.info("خروجی HTML: %s", out_path)
     loads = result.load_per_mentor()
     moved = [
         {"name": f"{s.first} {s.last}".strip() or s.counter,
-         "from": s.initial_supporter, "to": s.final_supporter}
-        for s in result.students
-        if s.index not in result.stabilized
+         "from": s.initial_supporter, "to": result.mentor_for_student(i)}
+        for i, s in enumerate(result.students)
+        if i not in result.stabilized
     ]
     data = json.dumps(
         {"loads": loads,
          "moved": moved,
          "stats": dict(_stats_list(result))},
-        ensure_ascii=False)
+        ensure_ascii=False).replace("<", "\\u003c").replace(">", "\\u003e")
     Path(out_path).write_text(
         _HTML_TEMPLATE.replace("__DATA__", data), encoding="utf-8")
     log.info("گزارش HTML ذخیره شد: %s", out_path)
@@ -149,15 +156,17 @@ _HTML_TEMPLATE = r"""<!doctype html>
     <thead><tr><th>نام</th><th>پشتیبان اولیه</th>
     <th>پشتیبان نهایی</th></tr></thead>
     <tbody></tbody>
-  弹出
+  </table>
 </div>
 <script>
 const D = __DATA__;
 // stats
-document.getElementById("stats").innerHTML =
-  Object.entries(D.stats)
-    .map(([k,v])=>`<b>${k}:</b> ${v}`)
-    .join(" &nbsp;|&nbsp; ");
+const stats = document.getElementById("stats");
+Object.entries(D.stats).forEach(([k,v])=>{
+  const bold=document.createElement("b");
+  bold.textContent=k+": ";
+  stats.append(bold,document.createTextNode(String(v)+"   "));
+});
 // chart
 const cap = D.stats["ظرفیت محاسبه‌شده هر پشتیبان"] || 0;
 const colors = Object.values(D.loads).map(v =>
@@ -180,8 +189,13 @@ const tb = document.querySelector("#tbl tbody");
 function render(f){
   tb.innerHTML="";
   D.moved.filter(m=>!f||m.name.includes(f)).forEach(m=>{
-    tb.innerHTML+=`<tr><td>${m.name}</td><td>${m.from}</td>
-    <td>${m.to}</td></tr>`;
+    const row=document.createElement("tr");
+    for(const value of [m.name,m.from,m.to]){
+      const cell=document.createElement("td");
+      cell.textContent=value;
+      row.appendChild(cell);
+    }
+    tb.appendChild(row);
   });
 }
 render("");
