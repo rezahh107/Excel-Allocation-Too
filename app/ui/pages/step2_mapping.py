@@ -80,8 +80,8 @@ class Step2Mapping(QWizardPage):
     def initializePage(self) -> None:  # noqa: N802
         m1 = auto_detect(self.state.book1_headers, _ROLES1)
         m2 = auto_detect(self.state.book2_headers, _ROLES2)
-        m1 = self._apply_saved(m1, self.state.saved_map1)
-        m2 = self._apply_saved(m2, self.state.saved_map2)
+        m1 = self._apply_saved(m1, self.state.map1 or self.state.saved_map1)
+        m2 = self._apply_saved(m2, self.state.map2 or self.state.saved_map2)
         self.table1.load(m1)
         self.table2.load(m2)
         self._validate()
@@ -103,8 +103,12 @@ class Step2Mapping(QWizardPage):
         self._update_preview()
 
     def _validate(self) -> None:
-        self.state.map1 = self.table1.current_mapping()
-        self.state.map2 = self.table2.current_mapping()
+        new_map1 = self.table1.current_mapping()
+        new_map2 = self.table2.current_mapping()
+        if new_map1 != self.state.map1 or new_map2 != self.state.map2:
+            self.state.invalidate_result()
+        self.state.map1 = new_map1
+        self.state.map2 = new_map2
         errs1 = validate_mapping(self.state.map1, REQUIRED_BOOK1)
         errs2 = validate_mapping(self.state.map2, REQUIRED_BOOK2)
         self.state.map_errors = errs1 + errs2
@@ -143,7 +147,7 @@ class Step2Mapping(QWizardPage):
         for col, rv in saved.items():
             if col in out:
                 try:
-                    out[col] = Role(rv)
+                    out[col] = rv if isinstance(rv, Role) else Role(rv)
                 except ValueError:
                     pass
         return out
