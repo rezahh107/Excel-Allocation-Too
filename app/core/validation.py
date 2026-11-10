@@ -35,26 +35,36 @@ def validate_mapping(mapping: dict[str, Role],
 
 
 def validate_result(result: AllocationResult) -> list[str]:
-    """Verify allocation invariants; return list of violations."""
-    issues: list[str] = []
-    total = sum(len(v) for v in result.assigned.values())
-    if total != result.total_students:
-        issues.append("تعداد تخصیص‌ها با تعداد دانش‌آموزان برابر نیست.")
-    for m in result.mentors:
-        if len(result.assigned.get(m.name, [])) > result.capacity:
-            issues.append(
-                f"پشتیبان {m.name} از ظرفیت تجاوز کرده است.")
-    for name, idxs in result.assigned.items():
-        for idx in idxs:
-            if idx in result.stabilized:
-                stu = result.students[idx]
-                if stu.initial_supporter != name:
-                    issues.append(
-                        f"دانش‌آموز تثبیت‌شده {stu.counter} "
-                        f"جابه‌جا شده است.")
-    if issues:
-        log.warning("مشکلات اعتبارسنجی: %s", issues)
-    return issues
+    """Compatibility API; the same authoritative postconditions check."""
+    try:
+        ensure_result_valid(result)
+    except AllocationError as exc:
+        return [str(exc)]
+    return []
+
+
+def ensure_result_valid(result: AllocationResult) -> None:
+    """Enforce exact assignment, valid participants, capacities and global fairness."""
+    validate_preconditions(result.students, result.mentors, result.capacity)
+    validate_postconditions(result.students, result.mentors, result.assigned)
+    mentor_names = {mentor.name for mentor in result.mentors}
+    missing_mentors = sorted(mentor_names - set(result.assigned))
+    if missing_mentors:
+        raise IntegrityError(IntegrityReason.MISSING_MENTORS, missing_mentors)
+    loads = [len(result.assigned[mentor.name]) for mentor in result.mentors]
+    if max(loads) - min(loads) > 1:
+        raise IntegrityError(IntegrityReason.FAIRNESS, loads)
+    if result.stabilized:
+        for idx in result.stabilized:
+            if type(idx) is not int or not 0 <= idx < len(result.students):
+                raise ValidationError("شناسه داخلی تثبیت‌شده نامعتبر است.")
+            mentor = next(
+                (name for name, items in result.assigned.items() if idx in items),
+                None,
+            )
+            if (mentor is None or mentor.casefold().strip() !=
+                    result.students[idx].initial_supporter.casefold().strip()):
+                raise ValidationError("تخصیص تثبیت‌شده در پیش‌نمایش تغییر کرده است.")
 
 
 # =============================================================================
@@ -83,6 +93,9 @@ class IntegrityReason(str, Enum):
     PHANTOM_MENTORS = "phantom_mentors"
     PHANTOM_STUDENTS = "phantom_students"
     MISSING_STUDENTS = "missing_students"
+    MISSING_MENTORS = "missing_mentors"
+    FAIRNESS = "global_mentor_fairness"
+    INVALID_STUDENT_REFERENCES = "invalid_student_references"
 
 
 class AllocationError(Exception):
@@ -164,7 +177,7 @@ def validate_preconditions(students, mentors, capacity: int | None = None) -> No
             getattr(mentor, "manager", None),
             "mentor.manager",
         )
-        normalized_names.append(name)
+        normalized_names.append(name.casefold())
 
     seen: set[str] = set()
     duplicates: list[str] = []
@@ -177,10 +190,8 @@ def validate_preconditions(students, mentors, capacity: int | None = None) -> No
     if duplicates:
         raise ValidationError(f"duplicate mentor names: {duplicates}")
 
-    # Only validate capacity type for now.
-    # Do NOT enforce capacity <= 0 yet; domain rule is still open.
-    if capacity is not None and not isinstance(capacity, int):
-        raise ValidationError("capacity must be an int or None")
+    if capacity is not None and (type(capacity) is not int or capacity < 0):
+        raise ValidationError("capacity must be a nonnegative int or None")
 
 
 def validate_postconditions(students, mentors, assigned: dict[str, list[int]]) -> None:
@@ -205,6 +216,12 @@ def validate_postconditions(students, mentors, assigned: dict[str, list[int]]) -
 
     mentor_names = set(mentor_capacity.keys())
 
+    if not isinstance(assigned, dict):
+        raise ValidationError("assignments must be a dictionary")
+    for name, indices in assigned.items():
+        if not isinstance(name, str) or not isinstance(indices, list):
+            raise ValidationError("assignment entries must map names to lists")
+
     # 1. Phantom Mentor
     phantom_mentors = [name for name in assigned.keys() if name not in mentor_names]
     if phantom_mentors:
@@ -213,9 +230,20 @@ def validate_postconditions(students, mentors, assigned: dict[str, list[int]]) -
             phantom_mentors,
         )
 
+    # Reject bool/float/string/None references before set operations; bool == 0
+    # in Python, so a simple set comparison would silently lose identity.
+    invalid = [
+        repr(idx) for items in assigned.values() for idx in items
+        if type(idx) is not int
+    ]
+    if invalid:
+        raise IntegrityError(IntegrityReason.INVALID_STUDENT_REFERENCES, invalid)
+
     # 2. Capacity Violation
     for mentor_name, student_indices in assigned.items():
         capacity = mentor_capacity[mentor_name]
+        if type(capacity) is not int or capacity < 0:
+            raise ValidationError("mentor capacity is invalid")
         if len(student_indices) > capacity:
             raise CapacityViolationError(
                 mentor=mentor_name,
