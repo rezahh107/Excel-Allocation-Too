@@ -58,3 +58,17 @@ def test_qt_preview_execution_export(monkeypatch, tmp_path):
     app.processEvents()
     del preview, run, export
     gc.collect()
+
+
+def test_real_six_step_main_window_initializes_offscreen():
+    """Prove the application's real main-window composition can initialize."""
+    from app.ui.main_window import MainWindow
+    app = _APP
+    window = MainWindow()
+    assert len(window.wizard.pageIds()) == 6
+    assert window.wizard.state.result is None
+    app.processEvents()
+    window.close()
+    window.deleteLater()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    app.processEvents()
