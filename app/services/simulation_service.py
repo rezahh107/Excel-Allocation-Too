@@ -43,7 +43,7 @@ def manager_report(result: AllocationResult) -> dict:
             "min_load": 0,
             "max_load": 0,
             "avg_load": 0.0,
-            "is_balanced": True,
+            "is_balanced": None,
         }
 
     deviations = {
@@ -66,7 +66,7 @@ def manager_report(result: AllocationResult) -> dict:
         "min_load": min(values),
         "max_load": max(values),
         "avg_load": round(sum(values) / len(values), 1),
-        "is_balanced": max_dev <= 1.0,
+        "is_balanced": None,
     }
 
 
@@ -98,7 +98,7 @@ def detailed_report(result: AllocationResult) -> str:
             f"میانگین بار مدیر: {mgr['avg_load']}",
             f"حداکثر انحراف:    {mgr['max_deviation']}",
             f"وضعیت: "
-            f"{'✅ متعادل' if mgr['is_balanced'] else '⚠ نامتعادل'}",
+            "سهم مستقل برای مدیر تعریف نشده است",
             "",
             f"{'مدیر':<20} {'پشتیبان':>8} {'هدف':>8}"
             f" {'واقعی':>8} {'انحراف':>8}",
