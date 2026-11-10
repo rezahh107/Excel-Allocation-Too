@@ -98,6 +98,8 @@ class Student:
     counter: str = ""
     first: str = ""
     last: str = ""
+    group: str = ""
+    manager: str = ""
     initial_supporter: str = ""
     grade: str = ""
     phone: str = ""
