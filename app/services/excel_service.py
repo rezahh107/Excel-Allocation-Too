@@ -49,6 +49,9 @@ def export_excel(result: AllocationResult,
                  out_path: str) -> None:
     """Write the final assignment workbook (data + statistics sheets)."""
     result.assert_approved()
+    canonical = {mentor.name: mentor.manager for mentor in result.mentors}
+    if mentor_manager != canonical:
+        raise ValueError("نگاشت مدیران خروجی با نتیجهٔ تأییدشده مغایرت دارد.")
     log.info("خروجی Excel: %s", out_path)
     wb = Workbook()
     ws = wb.active
