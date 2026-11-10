@@ -98,7 +98,7 @@ class MiniDashboard(QGroupBox):
         self.card_mentors = _StatCard("پشتیبان")
         self.card_capacity = _StatCard("ظرفیت")
         self.card_mentor_b = _StatCard("توازن پشتیبان")
-        self.card_manager_b = _StatCard("توازن مدیر")
+        self.card_manager_b = _StatCard("بار مدیرها")
 
         cards = [
             self.card_students,
@@ -229,12 +229,6 @@ class MiniDashboard(QGroupBox):
         warnings: list[str] = []
         if mentor_spread > 3:
             warnings.append(f"اختلاف بار پشتیبان‌ها زیاد است (±{mentor_spread}).")
-        if mgr.get("managers"):
-            max_dev = self._as_float(mgr.get("max_deviation", 0.0))
-            if max_dev > 1.0:
-                warnings.append(
-                    f"توزیع بین مدیرها از هدف فاصله دارد (حداکثر انحراف: {self._fmt_float(max_dev)})."
-                )
         if loads and cap and max(loads) > cap:
             warnings.append("⚠ برخی پشتیبان‌ها از ظرفیت عبور کرده‌اند.")
 
@@ -269,50 +263,26 @@ class MiniDashboard(QGroupBox):
         self._rebalance_box.show()
 
     def _apply_manager_diagnostics(self, mgr: dict) -> None:
+        """Manager totals are descriptive; fairness is only per mentor."""
         managers = mgr.get("managers") or []
         if not isinstance(managers, list) or not managers:
             self.card_manager_b.set_value("—", "نامشخص")
-            self._manager_detail.setText("")
             self._manager_detail.hide()
             return
 
-        max_dev = self._as_float(mgr.get("max_deviation", 0.0))
-        balanced = bool(mgr.get("is_balanced", False))
-        color = self._manager_color(max_dev)
-
         min_load = self._as_int(mgr.get("min_load", 0))
         max_load = self._as_int(mgr.get("max_load", 0))
-        hint = f"{min_load} … {max_load} نفر"
-
-        self.card_manager_b.set_value(f"±{self._fmt_float(max_dev)}", hint, color)
-
-        loads = mgr.get("loads") or {}
-        targets = mgr.get("targets") or {}
-        deviations = mgr.get("deviations") or {}
-
-        ranked = sorted(
-            [name for name in managers if isinstance(name, str)],
-            key=lambda name: abs(self._as_float(deviations.get(name, 0.0))),
-            reverse=True,
+        self.card_manager_b.set_value(
+            f"{min_load} … {max_load}", "تعداد مشتق از راهنماها"
         )
-
-        top = ranked[:3]
-        status = "متعادل" if balanced else "نیازمند تنظیم"
-
-        parts = [f"وضعیت مدیرها: {status}"]
-        for name in top:
-            load_val = self._as_int(loads.get(name, 0))
-            target_val = self._as_float(targets.get(name, 0.0))
-            dev_val = self._as_float(deviations.get(name, 0.0))
-            parts.append(
-                f"{name}: {load_val}/{self._fmt_float(target_val)} ({self._fmt_signed_float(dev_val)})"
-            )
-
-        if len(parts) > 1:
-            self._manager_detail.setText("  |  ".join(parts))
-            self._manager_detail.show()
-        else:
-            self._manager_detail.hide()
+        loads = mgr.get("loads") or {}
+        leaders = sorted(managers, key=lambda name: loads.get(name, 0), reverse=True)[:3]
+        parts = ["مدیرها سهم مستقل ندارند"] + [
+            f"{name}: {self._as_int(loads.get(name, 0))} نفر"
+            for name in leaders
+        ]
+        self._manager_detail.setText("  |  ".join(parts))
+        self._manager_detail.show()
 
     def _safe_manager_report(self, result) -> dict:
         try:
