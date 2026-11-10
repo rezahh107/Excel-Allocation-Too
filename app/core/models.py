@@ -215,6 +215,7 @@ class WizardState:
     stabilize_initial: bool = True
     result: Optional[AllocationResult] = None
     result_input_signature: str | None = None
+    preview_reviewed: bool = False
 
     def input_signature(self) -> str:
         """Fingerprint imported data, mappings and settings (not real IDs)."""
@@ -232,6 +233,7 @@ class WizardState:
     def invalidate_result(self) -> None:
         self.result = None
         self.result_input_signature = None
+        self.preview_reviewed = False
 
     def assert_current_result(self, require_approved: bool = False) -> AllocationResult:
         from app.core.validation import ValidationError, ensure_result_valid
