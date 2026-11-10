@@ -157,7 +157,7 @@ class AllocationWizard(QWizard):
 
         if s.result:
             self._sb_capacity.setText(f"ظرفیت: {s.result.capacity}")
-            self._sb_state.setText("✅  آماده خروجی")
+            self._sb_state.setText("✅  آماده خروجی" if s.result.approved_assignment_snapshot is not None else "⏳ در انتظار تأیید")
             self._sb_state.setStyleSheet(
                 f"color:{P.SUCCESS_LIGHT};font-weight:bold;padding:3px 8px;font-size:12px;"
             )
