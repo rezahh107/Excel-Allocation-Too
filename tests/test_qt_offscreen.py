@@ -58,7 +58,7 @@ def test_qt_preview_execution_export(monkeypatch, tmp_path):
     export.path.setText(str(tmp_path / "final.xlsx"))
     export.export()
     assert (tmp_path / "final.xlsx").exists()
-    assert (tmp_path / "final_report.html").exists()
+    assert not (tmp_path / "final_report.html").exists()
     from openpyxl import load_workbook
     workbook = load_workbook(tmp_path / "final.xlsx", data_only=True)
     assert workbook.active.cell(row=moved_student + 2, column=7).value == "M001"
@@ -86,3 +86,87 @@ def test_real_six_step_main_window_initializes_offscreen():
     window.deleteLater()
     QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
     app.processEvents()
+
+
+def _approved_synthetic_state():
+    from app.services.allocation_service import allocate
+
+    state = make_state(6, 3)
+    state.result = allocate(state)
+    state.result_input_signature = state.input_signature()
+    state.result.mark_approved()
+    return state
+
+
+def test_excel_only_overwrite_leaves_legacy_html_untouched(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from openpyxl import load_workbook
+    from app.ui.pages import step6_export
+
+    state = _approved_synthetic_state()
+    path = tmp_path / "final.xlsx"
+    path.write_bytes(b"previous workbook")
+    legacy_html = tmp_path / "final_report.html"
+    legacy_html.write_text("previous HTML from earlier version", encoding="utf-8")
+    page = Step6Export(state)
+    page.path.setText(str(path))
+    confirmation = SimpleNamespace(
+        StandardButton=SimpleNamespace(Yes=1, No=2),
+        warning=lambda *args: 1,
+    )
+    monkeypatch.setattr(step6_export, "QMessageBox", confirmation)
+    original_replace = step6_export.os.replace
+    publications = []
+
+    def record_replace(src, dst):
+        publications.append(dst)
+        return original_replace(src, dst)
+
+    monkeypatch.setattr(step6_export.os, "replace", record_replace)
+    page.export()
+    assert publications == [path]
+    workbook = load_workbook(path)
+    assert workbook.active.max_row == 7
+    workbook.close()
+    assert legacy_html.read_text(encoding="utf-8") == "previous HTML from earlier version"
+    assert "HTML" not in page.summary.text()
+    assert set(tmp_path.iterdir()) == {path, legacy_html}
+    page.close()
+    page.deleteLater()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    _APP.processEvents()
+
+
+def test_excel_only_replace_failure_preserves_previous_workbook(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from app.ui.pages import step6_export
+
+    state = _approved_synthetic_state()
+    path = tmp_path / "final.xlsx"
+    previous = b"previous workbook remains byte-for-byte unchanged"
+    path.write_bytes(previous)
+    page = Step6Export(state)
+    page.path.setText(str(path))
+    confirmation = SimpleNamespace(
+        StandardButton=SimpleNamespace(Yes=1, No=2),
+        warning=lambda *args: 1,
+    )
+    monkeypatch.setattr(step6_export, "QMessageBox", confirmation)
+    calls = []
+
+    def fail_publication(src, dst):
+        calls.append(dst)
+        raise PermissionError("synthetic replace failure")
+
+    monkeypatch.setattr(step6_export.os, "replace", fail_publication)
+    page.export()
+    assert calls == [path]
+    assert path.read_bytes() == previous
+    assert not (tmp_path / "final_report.html").exists()
+    assert set(tmp_path.iterdir()) == {path}
+    assert "خطا در خروجی" in page.summary.text()
+    assert not page.open_btn.isEnabled()
+    page.close()
+    page.deleteLater()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    _APP.processEvents()

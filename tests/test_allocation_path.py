@@ -12,7 +12,7 @@ from app.core.validation import (
 )
 from app.services.allocation_service import allocate
 from app.services.domain_service import build_domain
-from app.services.excel_service import export_excel, export_html_report
+from app.services.excel_service import export_excel
 from app.services.simulation_service import simulate
 
 
@@ -203,7 +203,7 @@ def test_stale_input_and_unapproved_result_cannot_export(tmp_path):
         state.assert_current_result()
 
 
-def test_exact_preview_final_excel_and_html_match(tmp_path):
+def test_exact_preview_final_excel_match(tmp_path):
     state = make_state(121, 60, concentrated=True)
     result = allocate(state)
     reviewed = result.assignment_snapshot()
@@ -213,9 +213,7 @@ def test_exact_preview_final_excel_and_html_match(tmp_path):
     result.mark_approved()
     assert state.assert_current_result(require_approved=True) is result
     excel_path = tmp_path / "allocation.xlsx"
-    html_path = tmp_path / "report.html"
     export_excel(result, {m.name: m.manager for m in result.mentors}, str(excel_path))
-    export_html_report(result, str(html_path))
     wb = load_workbook(excel_path)
     rows = list(wb.worksheets[0].values)
     assert len(rows) == 122
@@ -224,7 +222,6 @@ def test_exact_preview_final_excel_and_html_match(tmp_path):
         for i in range(121)
     ] == [(i, result.mentor_for_student(i)) for i in range(121)]
     assert reviewed == result.assignment_snapshot()
-    assert '"loads"' in html_path.read_text(encoding="utf-8")
     assert result.load_per_manager() == {
         "Manager-A": sum(result.load_per_mentor()[m.name] for m in result.mentors[:20]),
         "Manager-B": sum(result.load_per_mentor()[m.name] for m in result.mentors[20:]),
@@ -241,21 +238,20 @@ def test_approval_fails_after_manual_change_even_if_still_fair():
         result.assert_approved()
 
 
-def test_formula_like_text_stays_inert_in_xlsx_and_html(tmp_path):
+def test_formula_like_text_stays_inert_in_xlsx(tmp_path):
     state = make_state(3, 2)
     state.book2_rows[0]["first"] = '=HYPERLINK("https://invalid.test","X")'
     state.book2_rows[1]["first"] = '</script><script>alert("X")</script>'
     result = allocate(state)
     result.mark_approved()
     excel_path = tmp_path / "safe.xlsx"
-    html_path = tmp_path / "safe.html"
     export_excel(result, {m.name: m.manager for m in result.mentors}, str(excel_path))
-    export_html_report(result, str(html_path))
-    cell = load_workbook(excel_path).active["B2"]
-    assert cell.data_type == "s"
-    assert cell.value.startswith("=HYPERLINK")
-    html = html_path.read_text(encoding="utf-8")
-    assert '</script><script>alert' not in html
+    workbook = load_workbook(excel_path)
+    assert workbook.active["B2"].data_type == "s"
+    assert workbook.active["B2"].value.startswith("=HYPERLINK")
+    assert workbook.active["B3"].value == '</script><script>alert("X")</script>'
+    assert workbook.active["B3"].data_type == "s"
+    workbook.close()
 
 
 def test_postapproval_output_data_mutation_is_rejected(tmp_path):
