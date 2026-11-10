@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 from datetime import datetime
+from tempfile import TemporaryDirectory
+import os
 from pathlib import Path
 
 from PySide6.QtWidgets import (
@@ -111,7 +113,12 @@ class Step6Export(QWizardPage):
 
     def export(self) -> None:
         """Write Excel workbook and HTML report to disk."""
-        result = self.state.result
+        try:
+            result = self.state.assert_current_result(require_approved=True)
+        except Exception as exc:
+            self.summary.setStyleSheet(f"color:{P.WARNING_LIGHT}")
+            self.summary.setText(f"⚠ خروجی ممنوع: {exc}")
+            return
         if not result:
             self.summary.setStyleSheet(f"color:{P.WARNING_LIGHT}")
             self.summary.setText("⚠ نتیجه‌ای برای خروجی وجود ندارد.")
@@ -120,7 +127,8 @@ class Step6Export(QWizardPage):
         out_path = self._normalize_output_path(self.path.text())
         self.path.setText(str(out_path))
 
-        if out_path.exists():
+        html_path = out_path.with_name(out_path.stem + "_report.html")
+        if out_path.exists() or html_path.exists():
             ans = QMessageBox.warning(
                 self,
                 "تأیید بازنویسی فایل",
@@ -139,9 +147,16 @@ class Step6Export(QWizardPage):
         try:
             out_path.parent.mkdir(parents=True, exist_ok=True)
 
-            export_excel(result, mentor_manager, str(out_path))
-            html_path = out_path.with_name(out_path.stem + "_report.html")
-            export_html_report(result, str(html_path))
+            with TemporaryDirectory(dir=out_path.parent) as tmp:
+                excel_stage = Path(tmp) / "final.xlsx"
+                html_stage = Path(tmp) / "report.html"
+                export_excel(result, mentor_manager, str(excel_stage))
+                export_html_report(result, str(html_stage))
+                # Recheck before publishing either output; no stale approval.
+                if result is not self.state.assert_current_result(require_approved=True):
+                    raise ValueError("نتیجه پس از تأیید تغییر کرده است.")
+                os.replace(excel_stage, out_path)
+                os.replace(html_stage, html_path)
 
         except Exception as exc:  # noqa: BLE001
             msg = f"خطا در خروجی: {exc}"
@@ -180,7 +195,7 @@ class Step6Export(QWizardPage):
 
         path = Path(text).expanduser()
 
-        if not path.suffix:
+        if path.suffix.lower() != ".xlsx":
             path = path.with_suffix(".xlsx")
 
         if not path.is_absolute():
