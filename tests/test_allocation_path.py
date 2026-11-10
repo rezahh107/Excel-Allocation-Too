@@ -256,3 +256,30 @@ def test_formula_like_text_stays_inert_in_xlsx_and_html(tmp_path):
     assert cell.value.startswith("=HYPERLINK")
     html = html_path.read_text(encoding="utf-8")
     assert '</script><script>alert' not in html
+
+
+def test_postapproval_output_data_mutation_is_rejected(tmp_path):
+    result = allocate(make_state(6, 3))
+    result.mark_approved()
+    result.students[0].first = "Changed after approval"
+    with pytest.raises(ValidationError, match="تغییر"):
+        export_excel(result, {m.name: m.manager for m in result.mentors},
+                     str(tmp_path / "should-not-exist.xlsx"))
+    assert not (tmp_path / "should-not-exist.xlsx").exists()
+
+
+def test_wrong_external_manager_mapping_cannot_change_canonical_output(tmp_path):
+    result = allocate(make_state(6, 3))
+    result.mark_approved()
+    with pytest.raises(ValueError, match="نگاشت مدیران"):
+        export_excel(result, {"M000": "Wrong Manager"}, str(tmp_path / "wrong.xlsx"))
+    assert not (tmp_path / "wrong.xlsx").exists()
+
+
+def test_zero_eligible_bonus_capacity_is_rejected():
+    state = make_state(10, 8)
+    state.map1["cap"] = Role.CAPACITY
+    for i, row in enumerate(state.book1_rows):
+        row["cap"] = "2" if i == 0 else "1"
+    with pytest.raises(ValidationError, match="ظرفیت"):
+        allocate(state)
