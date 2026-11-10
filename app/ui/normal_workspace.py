@@ -145,7 +145,7 @@ class NormalWorkspace(QWidget):
         center_lay.addLayout(row1)
 
         # row 2: manager fairness
-        self.manager_group = QGroupBox("وضعیت عدالت بین مدیرها")
+        self.manager_group = QGroupBox("آمار بار مدیرها (مشتق از راهنماها)")
         mgr_grid = QGridLayout(self.manager_group)
         mgr_grid.setSpacing(8)
         self.card_mgr_min = _MetricCard("کمترین بار مدیر")
@@ -226,8 +226,8 @@ class NormalWorkspace(QWidget):
         hints = QLabel(
             "برای ویرایش جزئی هر بخش، روی آیتم مربوطه دوبار کلیک "
             "کنید تا همان مرحله در ویزارد باز شود.\n\n"
-            "برای عدالت بین مدیرها در مرحله تنظیمات،\n"
-            "گزینه «متعادل بین مدیرها و پشتیبان‌ها» را انتخاب کنید."
+            "سهم مدیر از مجموع تخصیص‌های راهنماهایش به‌دست می‌آید؛\n"
+            "برابری باید میان تمام راهنماها سنجیده شود."
         )
         hints.setWordWrap(True)
         hints.setObjectName("lbl_muted")
@@ -302,12 +302,8 @@ class NormalWorkspace(QWidget):
                 self.card_mgr_min.set_value(str(mgr["min_load"]))
                 self.card_mgr_max.set_value(str(mgr["max_load"]))
                 self.card_mgr_dev.set_value(str(mgr["max_deviation"]))
-                if mgr["is_balanced"]:
-                    self.card_mgr_bal.set_value("✅ متعادل")
-                    self.card_mgr_bal.set_color(P.SUCCESS_LIGHT)
-                else:
-                    self.card_mgr_bal.set_value("⚠ نامتعادل")
-                    self.card_mgr_bal.set_color(P.WARNING_LIGHT)
+                self.card_mgr_bal.set_value("سهم مستقل ندارد")
+                self.card_mgr_bal.set_color(P.TEXT_MUTED)
 
                 self.manager_status.setText(
                     "📊 مدیرها\n"
