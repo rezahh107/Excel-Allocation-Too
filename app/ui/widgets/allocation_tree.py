@@ -12,6 +12,7 @@ from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QAbstractItemView, QTreeWidget, QTreeWidgetItem
 
 from app.core.models import AllocationResult
+from app.core.validation import AllocationError, ensure_reassignment_admissible
 from app.utils.theme import ColorPalette as P
 
 ROLE_STUDENT_IDX = Qt.ItemDataRole.UserRole + 1
@@ -63,8 +64,8 @@ class AllocationTree(QTreeWidget):
         shown = 0
         for mentor in self._result.mentors:
             load = len(self._result.assigned.get(mentor.name, []))
-            cap = self._result.capacity
-            pct = load / cap if cap else 0
+            cap = self._result.mentor_capacity(mentor.name)
+            pct = load / cap if cap else 1.0  # zero capacity is full
 
             icon = (
                 "🔴" if pct >= 1.0 else
@@ -192,15 +193,23 @@ class AllocationTree(QTreeWidget):
     def _highlight_targets(self) -> None:
         if self._result is None:
             return
-
-        cap = self._result.capacity
+        item = self.currentItem()
+        if item is None or item.data(0, ROLE_STUDENT_IDX) is None:
+            return
+        parent = item.parent()
+        if parent is None:
+            return
+        old_mentor = parent.data(0, ROLE_MENTOR_NAME)
+        student_idx = item.data(0, ROLE_STUDENT_IDX)
         for mentor_name, top in self._mentor_items.items():
-            load = len(self._result.assigned.get(mentor_name, []))
-            if load < cap:
-                color = QColor(P.SUCCESS + "44")
-            else:
+            try:
+                ensure_reassignment_admissible(
+                    self._result, student_idx, old_mentor, mentor_name,
+                )
+            except AllocationError:
                 color = QColor(P.ERROR + "44")
-
+            else:
+                color = QColor(P.SUCCESS + "44")
             for col in range(self.columnCount()):
                 top.setBackground(col, color)
 

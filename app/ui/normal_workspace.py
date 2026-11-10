@@ -352,6 +352,8 @@ class NormalWorkspace(QWidget):
                 "📊 نتیجه\n✅ تخصیص موجود\n"
                 f"ظرفیت: {state.result.capacity}\n"
                 f"بار پشتیبان: {min_l}–{max_l}\n"
+                f"تخصیص جدید: {state.result.num_new}\n"
+                f"تثبیت‌نشده: {state.result.num_non_stabilized}\n"
                 f"جابه‌جا شده: {state.result.num_moved}"
             )
         else:

@@ -127,7 +127,6 @@ class AllocationResult:
     fairness: FairnessMode = FairnessMode.ROUND_ROBIN
     stabilized: set[int] = field(default_factory=set)
     assigned: dict[str, list[int]] = field(default_factory=dict)
-    num_moved: int = 0
     rebalance_moves: int = 0
     # A reviewed result is the only possible source of a final export.
     approved_assignment_snapshot: tuple | None = field(default=None, repr=False)
@@ -171,6 +170,44 @@ class AllocationResult:
             if index in indices:
                 return name
         raise ValueError(f"دانش‌آموز داخلی {index} فاقد تخصیص است.")
+
+    def movement_counts(self) -> dict[str, int]:
+        """Compare imported mentor labels with the *current* allocation.
+
+        This is not a real-world student or mentor identity assertion.
+        """
+        counts = {"new": 0, "unchanged": 0, "changed": 0}
+        for index, student in enumerate(self.students):
+            initial = student.initial_supporter.strip().casefold()
+            if not initial:
+                counts["new"] += 1
+            elif initial == self.mentor_for_student(index).strip().casefold():
+                counts["unchanged"] += 1
+            else:
+                counts["changed"] += 1
+        return counts
+
+    @property
+    def num_moved(self) -> int:
+        """Actual changes from a nonempty imported initial-mentor label."""
+        return self.movement_counts()["changed"]
+
+    @property
+    def num_new(self) -> int:
+        return self.movement_counts()["new"]
+
+    @property
+    def num_non_stabilized(self) -> int:
+        return self.total_students - len(self.stabilized)
+
+    def mentor_capacity(self, mentor_name: str) -> int:
+        """Effective mentor limit carried by this validated allocation."""
+        for mentor in self.mentors:
+            if mentor.name == mentor_name:
+                if type(mentor.capacity) is not int or mentor.capacity < 0:
+                    raise ValueError("ظرفیت مؤثر پشتیبان نامعتبر است.")
+                return mentor.capacity
+        raise ValueError(f"پشتیبان نامعتبر است: {mentor_name!r}")
 
     @property
     def total_students(self) -> int:

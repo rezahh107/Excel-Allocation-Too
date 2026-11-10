@@ -128,7 +128,6 @@ def allocate_domain(
     result = AllocationResult(
         students=list(students), mentors=result_mentors, capacity=high,
         fairness=mode, stabilized=stabilized, assigned=assigned,
-        num_moved=n - len(stabilized),
     )
     ensure_result_valid(result)
     return result

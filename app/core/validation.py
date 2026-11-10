@@ -286,3 +286,35 @@ def validate_postconditions(students, mentors, assigned: dict[str, list[int]]) -
             IntegrityReason.MISSING_STUDENTS,
             missing_students,
         )
+
+
+def ensure_reassignment_admissible(
+    result: AllocationResult, student_idx: int, old_mentor: str, new_mentor: str,
+) -> None:
+    """Validate one interactive reassignment before creating an undo command.
+
+    Final global-fairness validation remains a distinct requirement at review.
+    """
+    if type(student_idx) is not int or not 0 <= student_idx < len(result.students):
+        raise ValidationError("شناسه داخلی دانش‌آموز برای انتقال نامعتبر است.")
+    if not isinstance(old_mentor, str) or not isinstance(new_mentor, str):
+        raise ValidationError("نام پشتیبان مبدا یا مقصد نامعتبر است.")
+    if old_mentor == new_mentor:
+        raise ValidationError("پشتیبان مبدا و مقصد یکسان است.")
+    if old_mentor not in result.assigned or new_mentor not in result.assigned:
+        raise ValidationError("پشتیبان مبدا یا مقصد در تخصیص وجود ندارد.")
+    try:
+        result.mentor_capacity(old_mentor)
+        limit = result.mentor_capacity(new_mentor)
+    except ValueError as exc:
+        raise ValidationError(str(exc)) from exc
+    if (not isinstance(result.assigned[old_mentor], list)
+            or not isinstance(result.assigned[new_mentor], list)):
+        raise ValidationError("ساختار تخصیص پشتیبان نامعتبر است.")
+    if student_idx in result.stabilized:
+        raise ValidationError("دانش‌آموز تثبیت‌شده قابل جابه‌جایی نیست.")
+    if (student_idx not in result.assigned[old_mentor]
+            or student_idx in result.assigned[new_mentor]):
+        raise ValidationError("تخصیص فعلی دانش‌آموز با مبدا اعلام‌شده مطابقت ندارد.")
+    if len(result.assigned[new_mentor]) >= limit:
+        raise ValidationError(f"ظرفیت مؤثر پشتیبان «{new_mentor}» تکمیل است.")

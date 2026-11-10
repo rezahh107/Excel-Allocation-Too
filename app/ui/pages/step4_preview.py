@@ -6,7 +6,7 @@ from PySide6.QtWidgets import (QHBoxLayout, QLabel, QMessageBox,
 
 from app.core.models import WizardState
 from app.services.allocation_service import allocate
-from app.core.validation import validate_result
+from app.core.validation import AllocationError, ensure_reassignment_admissible, validate_result
 from app.ui.commands import ReassignCommand
 from app.ui.widgets.allocation_tree import AllocationTree
 from app.utils.rtl_utils import apply_rtl
@@ -108,18 +108,12 @@ class Step4Preview(QWizardPage):
         result = self.state.result
         if result is None:
             return
-        self.state.preview_reviewed = False
-        result.approved_assignment_snapshot = None
-        # validation: stabilised
-        if student_idx in result.stabilized:
-            self._error("🔒 دانش‌آموز تثبیت‌شده قابل جابه‌جایی نیست.")
+        try:
+            ensure_reassignment_admissible(result, student_idx, old_mentor, new_mentor)
+        except AllocationError as exc:
+            self._error(f"🔴 انتقال لغو شد: {exc}")
             return
-        # validation: capacity
-        if len(result.assigned.get(new_mentor, [])) >= result.capacity:
-            self._error(
-                f"🔴 ظرفیت پشتیبان «{new_mentor}» تکمیل است. "
-                "انتقال لغو شد.")
-            return
+        # The undo command, not an attempted invalid drop, invalidates review.
         cmd = ReassignCommand(
             result, student_idx, old_mentor, new_mentor,
             self._on_cmd_applied)

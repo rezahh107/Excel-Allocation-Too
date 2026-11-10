@@ -73,12 +73,20 @@ class Step6Export(QWizardPage):
         stats_lay.addWidget(self.summary)
 
         lay.addWidget(stats_grp)
+        self.legacy_warning = QLabel("")
+        self.legacy_warning.setWordWrap(True)
+        self.legacy_warning.setStyleSheet(f"color:{P.WARNING_LIGHT}")
+        self.legacy_warning.setAccessibleName("هشدار گزارش HTML قدیمی")
+        lay.addWidget(self.legacy_warning)
+        self.path.textChanged.connect(self._refresh_legacy_warning)
+        self._refresh_legacy_warning()
         lay.addStretch()
 
     # ── QWizardPage API ─────────────────────────────────────────
     def initializePage(self) -> None:  # noqa: N802
         if not self.path.text().strip():
             self.path.setText(self._default_export_path())
+        self._refresh_legacy_warning()
 
         result = self.state.result
         if result:
@@ -91,6 +99,8 @@ class Step6Export(QWizardPage):
                 f"ظرفیت: {rep['capacity']}  |  "
                 f"حداقل: {rep['min']}  |  حداکثر: {rep['max']}  |  "
                 f"میانگین: {rep['avg']}  |  "
+                f"تخصیص جدید: {result.num_new}  |  "
+                f"تثبیت‌نشده: {result.num_non_stabilized}  |  "
                 f"جابه‌جا شده: {result.num_moved}"
             )
         else:
@@ -126,6 +136,7 @@ class Step6Export(QWizardPage):
 
         out_path = self._normalize_output_path(self.path.text())
         self.path.setText(str(out_path))
+        self._refresh_legacy_warning()
 
         if out_path.exists():
             ans = QMessageBox.warning(
@@ -170,12 +181,32 @@ class Step6Export(QWizardPage):
 
         if self.wizard() and hasattr(self.wizard(), "toast"):
             self.wizard().toast.show_message(
-                "خروجی با موفقیت ذخیره شد ✅",
+                "فایل Excel با موفقیت ذخیره شد ✅",
                 "success",
                 4000,
             )
 
     # ── helpers ────────────────────────────────────────────────
+    def _refresh_legacy_warning(self, _text: str = "") -> None:
+        """Disclose historical same-stem HTML without reading or modifying it."""
+        raw = self.path.text().strip()
+        if not raw:
+            self.legacy_warning.clear()
+            self.legacy_warning.setVisible(False)
+            return
+        excel_path = self._normalize_output_path(raw)
+        legacy_path = excel_path.with_name(excel_path.stem + "_report.html")
+        if legacy_path.is_file():
+            self.legacy_warning.setText(
+                f"⚠ گزارش HTML قدیمی وجود دارد: {legacy_path}\n"
+                "این فایل متعلق به گردش‌کار قبلی است، به‌روزرسانی نمی‌شود "
+                "و نباید گزارش تخصیص فعلی تلقی شود. فقط Excel جدید معتبر است."
+            )
+            self.legacy_warning.setVisible(True)
+        else:
+            self.legacy_warning.clear()
+            self.legacy_warning.setVisible(False)
+
     @staticmethod
     def _default_export_path() -> str:
         desktop = Path.home() / "Desktop"

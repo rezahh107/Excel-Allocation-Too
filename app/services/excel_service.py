@@ -89,6 +89,9 @@ def _stats_list(result: AllocationResult) -> list[tuple[str, int | float]]:
         ("حداکثر تعداد دانش‌آموز",          max(vals) if vals else 0),
         ("میانگین دانش‌آموز",               avg),
         ("تعداد تثبیت‌شده",                 len(result.stabilized)),
+        ("تعداد تثبیت‌نشده",                result.num_non_stabilized),
+        ("تعداد تخصیص جدید (بدون پشتیبان اولیه)", result.num_new),
+        ("تعداد بدون تغییر پشتیبان",         result.movement_counts()["unchanged"]),
         ("تعداد جابه‌جا شده",               result.num_moved),
     ]
 
