@@ -4,10 +4,8 @@ from PySide6.QtCore import QThread, Signal
 from PySide6.QtWidgets import (QHBoxLayout, QLabel, QProgressBar,
                                QPushButton, QVBoxLayout, QWizardPage)
 
-from app.core.allocator import Allocator
 from app.core.models import WizardState
 from app.core.validation import validate_result
-from app.services.domain_service import build_domain
 from app.ui.widgets.confirm_execution_dialog import ConfirmExecutionDialog
 from app.ui.widgets.log_viewer import LogViewer
 from app.ui.widgets.stage_indicator import StageIndicator
@@ -16,44 +14,34 @@ from app.utils.theme import ColorPalette as P
 
 
 class _Worker(QThread):
-    progress    = Signal(int, str, str)   # percent, message, stage_key
+    progress = Signal(int, str, str)
     finished_ok = Signal(object)
-    failed      = Signal(str)
+    failed = Signal(str)
 
-    def __init__(self, students, mentors, mode) -> None:
+    def __init__(self, result) -> None:
         super().__init__()
-        self._students = students
-        self._mentors  = mentors
-        self._mode     = mode
-        self._stop     = False
+        self._result = result
+        self._stop = False
 
     def stop(self) -> None:
         self._stop = True
 
-    def run(self) -> None:  # noqa: D102
+    def run(self) -> None:
         try:
-            self.progress.emit(5,  "بارگذاری داده...",  "load")
-            self.progress.emit(20, "ساخت domain...",    "domain")
-            result = Allocator(self._students, self._mentors).run(
-                self._mode, progress=self._cb)
-            self.progress.emit(95, "اعتبارسنجی...",     "validate")
-            issues = validate_result(result)
+            self.progress.emit(25, "بررسی پیش‌نمایش...", "load")
+            if self._stop:
+                raise RuntimeError("اجرا توسط کاربر متوقف شد.")
+            self.progress.emit(85, "اعتبارسنجی تخصیص...", "validate")
+            issues = validate_result(self._result)
             if issues:
                 self.failed.emit(" | ".join(issues))
                 return
-            self.progress.emit(100, "تکمیل.",            "done")
-            self.finished_ok.emit(result)
-        except Exception as exc:  # noqa: BLE001
+            if self._stop:
+                raise RuntimeError("اجرا توسط کاربر متوقف شد.")
+            self.progress.emit(100, "تأیید تخصیص بررسی‌شده", "done")
+            self.finished_ok.emit(self._result)
+        except Exception as exc:
             self.failed.emit(str(exc))
-
-    def _cb(self, p: int, msg: str) -> None:
-        if self._stop:
-            raise RuntimeError("اجرا توسط کاربر متوقف شد.")
-        stage = ("load"     if p <= 25 else
-                 "domain"   if p <= 45 else
-                 "allocate" if p <= 85 else
-                 "validate")
-        self.progress.emit(p, msg, stage)
 
 
 class Step5Execute(QWizardPage):
@@ -108,28 +96,28 @@ class Step5Execute(QWizardPage):
             return
 
         try:
-            students, mentors = build_domain(self.state)
-        except Exception as exc:  # noqa: BLE001
+            result = self.state.assert_current_result()
+            if not self.state.preview_reviewed:
+                raise ValueError("ابتدا پیش‌نمایش را در مرحله ۴ بررسی و تأیید کنید.")
+        except Exception as exc:
+            self._done = False
             self.log.add("ERROR", str(exc))
+            self.completeChanged.emit()
             return
 
         if not ConfirmExecutionDialog.confirm(
-            self,
-            self.state,
-            students,
-            mentors,
+            self, self.state, result.students, result.mentors
         ):
             self.log.add("WARNING", "اجرای تخصیص توسط کاربر لغو شد.")
-            self.run_btn.setEnabled(True)
-            self.stop_btn.setEnabled(False)
             return
 
         self.stage.reset()
-        self.log.add("INFO", "شروع اجرا...")
+        self.log.add("INFO", "تأیید همان تخصیص مشاهده‌شده...")
         self._running = True
+        self._done = False
         self.run_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
-        self._worker = _Worker(students, mentors, self.state.fairness)
+        self._worker = _Worker(result)
         self._worker.progress.connect(self._on_progress)
         self._worker.finished_ok.connect(self._on_ok)
         self._worker.failed.connect(self._on_fail)
@@ -152,7 +140,15 @@ class Step5Execute(QWizardPage):
         self._running = False
         self.run_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
-        self.state.result = result
+        try:
+            if result is not self.state.assert_current_result():
+                raise ValueError("نتیجه پس از پیش‌نمایش تغییر کرده است.")
+            if not self.state.preview_reviewed:
+                raise ValueError("پیش‌نمایش دوباره باید تأیید شود.")
+            result.mark_approved()
+        except Exception as exc:
+            self._on_fail(str(exc))
+            return
         self._done = True
         self.stage.set_stage("done", "done")
         self.log.add("INFO", "✅ تخصیص با موفقیت انجام شد.")
