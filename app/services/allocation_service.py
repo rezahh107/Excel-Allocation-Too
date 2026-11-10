@@ -107,14 +107,17 @@ def allocate_domain(
                 stabilized.add(i)
 
     pool = [i for i in range(n) if i not in stabilized]
+    cursor = 0
     for i in pool:
-        recipient = next(
-            (m.name for m in mentors if len(assigned[m.name]) < quotas[m.name]),
-            None,
-        )
-        if recipient is None:
+        for offset in range(k):
+            pos = (cursor + offset) % k
+            recipient = mentors[pos].name
+            if len(assigned[recipient]) < quotas[recipient]:
+                assigned[recipient].append(i)
+                cursor = (pos + 1) % k
+                break
+        else:
             raise ValidationError("ظرفیت کافی برای تخصیص همه دانش‌آموزان وجود ندارد.")
-        assigned[recipient].append(i)
 
     # The result carries the effective per-mentor capacity, not an override
     # that could be mistaken for permission to violate the global quota.
