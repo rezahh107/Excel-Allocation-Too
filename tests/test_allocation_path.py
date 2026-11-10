@@ -283,3 +283,36 @@ def test_zero_eligible_bonus_capacity_is_rejected():
         row["cap"] = "2" if i == 0 else "1"
     with pytest.raises(ValidationError, match="ظرفیت"):
         allocate(state)
+
+
+def test_duplicate_looking_student_rows_are_not_silently_collapsed():
+    state = make_state(8, 3)
+    state.book2_rows[1]["student-id"] = state.book2_rows[0]["student-id"]
+    state.book2_rows[1]["first"] = state.book2_rows[0]["first"]
+    result = allocate(state)
+    check_counts(result, 8, 3)
+    assert result.students[0].counter == result.students[1].counter
+    # A real-world student identity policy is not invented by this test.
+
+
+@pytest.mark.parametrize("change", ["capacity", "mode", "mapping", "stabilize", "mentor"])
+def test_settings_or_input_change_invalidates_previously_reviewed_result(change):
+    state = make_state(12, 4)
+    state.result = allocate(state)
+    state.result_input_signature = state.input_signature()
+    state.preview_reviewed = True
+    state.result.mark_approved()
+
+    if change == "capacity":
+        state.capacity_override = 7
+    elif change == "mode":
+        state.fairness = FairnessMode.MENTOR_BALANCED
+    elif change == "mapping":
+        state.map2["last"] = Role.GRADE
+    elif change == "stabilize":
+        state.stabilize_initial = True
+    elif change == "mentor":
+        state.book1_rows[0]["manager"] = "ChangedManager"
+
+    with pytest.raises(ValidationError, match="قدیمی"):
+        state.assert_current_result(require_approved=True)
