@@ -331,7 +331,7 @@ class MainWindow(QMainWindow):
 
         if state.result is not None:
             self.sb_result.setText(
-                f"نتیجه: آماده · ظرفیت {state.result.capacity}"
+                f"نتیجه: {'تأییدشده' if state.result.approved_assignment_snapshot is not None else 'پیش‌نمایش'} · ظرفیت {state.result.capacity}"
             )
         else:
             self.sb_result.setText("نتیجه: —")
