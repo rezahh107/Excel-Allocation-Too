@@ -133,6 +133,10 @@ class Step4Preview(QWizardPage):
         self.info.setStyleSheet(f"color:{P.SUCCESS_LIGHT}")
 
     def _on_cmd_applied(self) -> None:
+        # Undo/Redo can change a previously reviewed or approved preview.
+        self.state.preview_reviewed = False
+        if self.state.result is not None:
+            self.state.result.approved_assignment_snapshot = None
         self.tree.reload()
         self._update_count_label()
         if self.wizard():
