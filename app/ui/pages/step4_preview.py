@@ -5,8 +5,8 @@ from PySide6.QtWidgets import (QHBoxLayout, QLabel, QMessageBox,
                                QPushButton, QVBoxLayout, QWizardPage)
 
 from app.core.models import WizardState
-from app.services.domain_service import build_domain
-from app.services.simulation_service import simulate
+from app.services.allocation_service import allocate
+from app.core.validation import validate_result
 from app.ui.commands import ReassignCommand
 from app.ui.widgets.allocation_tree import AllocationTree
 from app.utils.rtl_utils import apply_rtl
@@ -65,37 +65,42 @@ class Step4Preview(QWizardPage):
 
     # ── QWizardPage API ─────────────────────────────────────────
     def initializePage(self) -> None:  # noqa: N802
-        if self.state.result is None:
-            students, mentors = build_domain(self.state)
-            self.state.result = simulate(students, mentors,
-                                         self.state.fairness)
-        self.undo_stack.clear()
-        self.tree.load(self.state.result)
+        self.state.preview_reviewed = False
+        self._preview_error = ""
+        try:
+            if (self.state.result is None or
+                    self.state.result_input_signature != self.state.input_signature()):
+                self.state.invalidate_result()
+                self.state.result = allocate(self.state)
+                self.state.result_input_signature = self.state.input_signature()
+            self.state.result.approved_assignment_snapshot = None
+            self.undo_stack.clear()
+            self.tree.load(self.state.result)
+            self.info.setText("پیش‌نمایش حاضر است؛ تخصیص‌های دستی باید همچنان متعادل بمانند.")
+        except Exception as exc:
+            self._preview_error = str(exc)
+            self.info.setText("❌ " + self._preview_error)
         self._update_count_label()
         self._update_buttons()
+        self.completeChanged.emit()
 
     def validatePage(self) -> bool:  # noqa: N802
-        """Pre-execution imbalance warning before Step 5."""
-        result = self.state.result
-        if result is None:
-            return True
-        loads = result.load_per_mentor()
-        if not loads:
-            return True
-        mx, mn, cap = max(loads.values()), min(loads.values()), result.capacity
-        if mx > cap + 1 or mn < cap - 1:
-            ans = QMessageBox.warning(
-                self, "هشدار توازن",
-                f"توزیع نامتوازن است.\n"
-                f"حداکثر بار: {mx}  |  حداقل بار: {mn}  |  ظرفیت: {cap}\n"
-                "آیا ادامه می‌دهید؟",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No)
-            return ans == QMessageBox.StandardButton.Yes
+        try:
+            result = self.state.assert_current_result()
+            if self._preview_error:
+                raise ValueError(self._preview_error)
+            issues = validate_result(result)
+            if issues:
+                raise ValueError(" | ".join(issues))
+        except Exception as exc:
+            self.state.preview_reviewed = False
+            QMessageBox.warning(self, "تخصیص نامعتبر", str(exc))
+            return False
+        self.state.preview_reviewed = True
         return True
 
     def isComplete(self) -> bool:  # noqa: N802
-        return True
+        return not getattr(self, "_preview_error", "") and self.state.result is not None
 
     # ── drop handler ────────────────────────────────────────────
     def _on_move(self, student_idx: int,
@@ -103,6 +108,8 @@ class Step4Preview(QWizardPage):
         result = self.state.result
         if result is None:
             return
+        self.state.preview_reviewed = False
+        result.approved_assignment_snapshot = None
         # validation: stabilised
         if student_idx in result.stabilized:
             self._error("🔒 دانش‌آموز تثبیت‌شده قابل جابه‌جایی نیست.")
