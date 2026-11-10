@@ -373,7 +373,7 @@ class AllocationWizard(QWizard):
                 self.state.capacity_override = None
 
         self.state.stabilize_initial = bool(data.get("stabilize_initial", True))
-        self.state.result = None
+        self.state.invalidate_result()
         self.state.map_errors = []
 
         self._reload_rows_from_paths()
@@ -408,8 +408,12 @@ class AllocationWizard(QWizard):
             if not path:
                 return []
             try:
-                rows = load_table(path)
-                return rows if isinstance(rows, list) else []
+                headers, rows = load_table(path)
+                if label == "Book1":
+                    self.state.book1_headers = headers
+                else:
+                    self.state.book2_headers = headers
+                return rows
             except Exception as exc:
                 warnings.append(f"{label}: {exc}")
                 return []
