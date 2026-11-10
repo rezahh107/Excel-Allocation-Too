@@ -116,7 +116,7 @@ def detailed_report(result: AllocationResult) -> str:
     return "\n".join(lines)
 
 
-# ── backward-compatible simulate() ───────────────────────────────
+# ── backward-compatible simulate() ──────────────────────────────
 
 def simulate(
     students,
@@ -125,71 +125,6 @@ def simulate(
     capacity: int | None = None,
     stabilize_initial: bool = True,
 ):
-    """Run allocation from pre-built domain objects.
-
-    This is the legacy API called by step4_preview.py:
-        result = simulate(students, mentors, fairness)
-
-    Args:
-        students: list[Student] — already built by build_domain()
-        mentors:  list[Mentor]  — already built by build_domain()
-        fairness: FairnessMode  — allocation strategy
-        capacity: optional override; auto-calculated if None
-        stabilize_initial: whether to lock students with initial supporter
-
-    Returns:
-        AllocationResult
-    """
-    import math
-    from app.core.models import AllocationResult, FairnessMode
-    from app.core.validation import (
-        validate_preconditions,
-        validate_postconditions,
-    )
-    from app.services.allocation_service import (
-        _compute_stabilised,
-        _allocate_original,
-        _allocate_round_robin,
-        _allocate_mentor_balanced,
-        _allocate_manager_balanced,
-        _STRATEGY,
-    )
-
-    # Calculate capacity if not provided.
-    # Keep this before validate_preconditions so the validation layer receives
-    # the effective capacity value. capacity=0 is still intentionally not
-    # finalized as a domain rule.
-    if capacity is None:
-        capacity = math.ceil(len(students) / max(len(mentors), 1))
-
-    validate_preconditions(students, mentors, capacity)
-
-    # Set capacity on mentor objects.
-    # NOTE: This preserves legacy behavior. simulate() currently mutates
-    # mentor.capacity when it is 0. Do not remove this without a separate
-    # mutation-safety refactor.
-    for m in mentors:
-        if m.capacity == 0:
-            m.capacity = capacity
-
-    # Compute stabilised set
-    stabilised = _compute_stabilised(students, mentors, stabilize_initial)
-
-    # Pick strategy
-    strategy = _STRATEGY.get(fairness, _allocate_round_robin)
-
-    assigned, num_moved = strategy(students, mentors, capacity, stabilised)
-
-    validate_postconditions(students, mentors, assigned)
-
-    result = AllocationResult(
-        students=students,
-        mentors=mentors,
-        capacity=capacity,
-        fairness=fairness,
-        stabilized=stabilised,
-        assigned=assigned,
-        num_moved=num_moved,
-    )
-
-    return result
+    """Use the same production allocator as the main execution path."""
+    from app.services.allocation_service import allocate_domain
+    return allocate_domain(students, mentors, fairness, capacity, stabilize_initial)
