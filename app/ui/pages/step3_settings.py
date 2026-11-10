@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QLabel,
     QSpinBox,
+    QMessageBox,
     QVBoxLayout,
     QWizardPage,
 )
@@ -26,8 +27,7 @@ log = get_logger("step3_settings")
 
 _FAIRNESS_DESCRIPTIONS: dict[FairnessMode, str] = {
     FairnessMode.ORIGINAL: (
-        "هر دانش‌آموز تا حد امکان پیش پشتیبان اولیه‌اش می‌ماند. "
-        "عدالت بین پشتیبان‌ها تضمین نمی‌شود."
+        "حالت قدیمی با عدالت سراسری سازگار نیست و برای تأیید نهایی مجاز نیست."
     ),
     FairnessMode.ROUND_ROBIN: (
         "دانش‌آموزان به‌صورت نوبتی به پشتیبان‌ها اختصاص می‌یابند. "
@@ -38,9 +38,7 @@ _FAIRNESS_DESCRIPTIONS: dict[FairnessMode, str] = {
         "بهترین انتخاب برای عدالت بین پشتیبان‌ها."
     ),
     FairnessMode.MANAGER_BALANCED: (
-        "ابتدا بار کاری مدیرها به‌صورت متناسب با تعداد پشتیبان‌ها "
-        "توزیع می‌شود، سپس داخل هر مدیر بین پشتیبان‌ها عادلانه "
-        "تقسیم می‌شود. ✅ پیشنهاد برای عدالت در کل سازمان."
+        "حالت قدیمی دارای سهم مستقل مدیر است؛ اکنون انتخاب آن مجاز نیست."
     ),
 }
 
@@ -181,6 +179,9 @@ class Step3Settings(QWizardPage):
             )
             stabilize = self.stabilize_chk.isChecked()
 
+            if ((fairness, capacity, stabilize) !=
+                    (self.state.fairness, self.state.capacity_override, self.state.stabilize_initial)):
+                self.state.invalidate_result()
             students, mentors = build_domain(self.state)
             result = simulate(
                 students,
@@ -202,13 +203,18 @@ class Step3Settings(QWizardPage):
         self.capacity_spin.setEnabled(not auto)
 
     def validatePage(self) -> bool:  # noqa: N802
-        self.state.fairness = self.fairness_combo.currentData()
-        self.state.capacity_override = (
-            None
-            if self.auto_capacity.isChecked()
-            else self.capacity_spin.value()
-        )
-        self.state.stabilize_initial = self.stabilize_chk.isChecked()
+        fairness = self.fairness_combo.currentData()
+        if fairness not in (FairnessMode.ROUND_ROBIN, FairnessMode.MENTOR_BALANCED):
+            QMessageBox.warning(self, "حالت غیرمجاز", "برای عدالت سراسری حالت نوبتی یا متعادل را انتخاب کنید.")
+            return False
+        capacity = None if self.auto_capacity.isChecked() else self.capacity_spin.value()
+        stabilize = self.stabilize_chk.isChecked()
+        if ((fairness, capacity, stabilize) !=
+                (self.state.fairness, self.state.capacity_override, self.state.stabilize_initial)):
+            self.state.invalidate_result()
+        self.state.fairness = fairness
+        self.state.capacity_override = capacity
+        self.state.stabilize_initial = stabilize
         return True
 
     def isComplete(self) -> bool:  # noqa: N802
