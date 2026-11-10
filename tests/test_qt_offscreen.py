@@ -25,6 +25,16 @@ def test_qt_preview_execution_export(monkeypatch, tmp_path):
     preview = Step4Preview(state)
     preview.initializePage()
     assert preview.isComplete()
+    before_manual = state.result.assignment_snapshot()
+    moved_student = state.result.assigned["M000"][-1]
+    preview._on_move(moved_student, "M000", "M001")
+    after_manual = state.result.assignment_snapshot()
+    assert after_manual != before_manual
+    assert preview.validatePage()
+    preview.undo_stack.undo()
+    assert state.result.assignment_snapshot() == before_manual
+    preview.undo_stack.redo()
+    assert state.result.assignment_snapshot() == after_manual
     assert preview.validatePage()
 
     initial = state.result.assignment_snapshot()
@@ -49,6 +59,10 @@ def test_qt_preview_execution_export(monkeypatch, tmp_path):
     export.export()
     assert (tmp_path / "final.xlsx").exists()
     assert (tmp_path / "final_report.html").exists()
+    from openpyxl import load_workbook
+    workbook = load_workbook(tmp_path / "final.xlsx", data_only=True)
+    assert workbook.active.cell(row=moved_student + 2, column=7).value == "M001"
+    workbook.close()
 
     for widget in (preview, run, export):
         widget.close()
