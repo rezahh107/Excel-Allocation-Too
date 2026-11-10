@@ -158,10 +158,8 @@ class Step3Settings(QWizardPage):
         mode: FairnessMode = self.fairness_combo.currentData()
         desc = _FAIRNESS_DESCRIPTIONS.get(mode, "")
         self.fairness_desc.setText(desc)
-        if mode == FairnessMode.MANAGER_BALANCED:
-            self.fairness_desc.setStyleSheet(
-                f"color:{P.SUCCESS_LIGHT}; font-style:italic;"
-            )
+        if mode in (FairnessMode.MANAGER_BALANCED, FairnessMode.ORIGINAL):
+            self.fairness_desc.setStyleSheet(f"color:{P.ERROR_LIGHT};")
         else:
             self.fairness_desc.setStyleSheet(f"color:{P.TEXT_MUTED};")
 
