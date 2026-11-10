@@ -138,16 +138,32 @@ class AllocationResult:
             for name, indices in sorted(self.assigned.items())
         )
 
+    def approval_snapshot(self) -> tuple:
+        """Freeze exactly the fields consumed by exports, including provenance."""
+        student_rows = tuple(
+            (s.counter, s.first, s.last, s.group, s.manager,
+             s.initial_supporter, s.grade, s.phone)
+            for s in self.students
+        )
+        mentor_rows = tuple(
+            (m.name, m.manager, m.capacity) for m in self.mentors
+        )
+        return (
+            self.assignment_snapshot(), student_rows, mentor_rows,
+            self.capacity, self.fairness, tuple(sorted(self.stabilized)),
+            self.num_moved,
+        )
+
     def mark_approved(self) -> None:
         from app.core.validation import ensure_result_valid
         ensure_result_valid(self)
-        self.approved_assignment_snapshot = self.assignment_snapshot()
+        self.approved_assignment_snapshot = self.approval_snapshot()
 
     def assert_approved(self) -> None:
         from app.core.validation import ValidationError, ensure_result_valid
         ensure_result_valid(self)
         if (self.approved_assignment_snapshot is None
-                or self.assignment_snapshot() != self.approved_assignment_snapshot):
+                or self.approval_snapshot() != self.approved_assignment_snapshot):
             raise ValidationError("نتیجه تأیید نشده یا پس از تأیید تغییر کرده است.")
 
     def mentor_for_student(self, index: int) -> str:
