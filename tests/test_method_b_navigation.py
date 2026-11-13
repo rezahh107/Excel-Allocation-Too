@@ -128,9 +128,14 @@ def test_real_modal_cancel_approval_export_then_undo_redo(window, tmp_path):
     assert out.read_bytes() == previous_bytes
 
     # Legitimate recovery after the same invalidation must remain possible.
+    history_before = list(wizard.visitedIds())
     wizard.setCurrentId(ids[3])
+    history_after_request = list(wizard.visitedIds())
     wizard.next()
-    assert wizard.currentId() == ids[4] and state.preview_reviewed
+    assert wizard.currentId() == ids[4] and state.preview_reviewed, (
+        f"visited history: {history_before} -> {history_after_request} -> "
+        f"{wizard.visitedIds()}, reviewed={state.preview_reviewed}"
+    )
     QTimer.singleShot(0, lambda: _answer_dialog(True))
     wizard.s5.run_btn.click()
     _APP.processEvents()

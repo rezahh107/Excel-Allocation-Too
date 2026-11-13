@@ -160,7 +160,7 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence("Ctrl+1"), self, self._switch_to_wizard)
         QShortcut(QKeySequence("Ctrl+2"), self, self._switch_to_normal)
         QShortcut(QKeySequence("Ctrl+O"), self, lambda: self._open_wizard_page(0))
-        QShortcut(QKeySequence("Ctrl+S"), self, self._export_from_normal)
+        self._export_shortcut = QShortcut(QKeySequence("Ctrl+S"), self, self._export_from_normal)
         QShortcut(QKeySequence("F5"), self, self._run_from_toolbar)
         QShortcut(QKeySequence("F1"), self, self._show_help)
 
@@ -168,6 +168,8 @@ class MainWindow(QMainWindow):
     def _switch_mode_from_combo(self) -> None:
         """Switch central widget based on combo selection."""
         mode = self.mode_combo.currentData()
+        # The embedded wizard has its own Ctrl+S; avoid duplicate shortcuts.
+        self._export_shortcut.setEnabled(mode == self.MODE_NORMAL)
 
         if mode == self.MODE_NORMAL:
             self.stack.setCurrentWidget(self.normal_workspace)
@@ -195,6 +197,9 @@ class MainWindow(QMainWindow):
 
     def _on_mode_changed(self, _index: int) -> None:
         """Synchronise combo and status after stacked widget changes."""
+        self._export_shortcut.setEnabled(
+            self.stack.currentWidget() is self.normal_workspace
+        )
         if self.stack.currentWidget() is self.normal_workspace:
             idx = self.mode_combo.findData(self.MODE_NORMAL)
             self.normal_workspace.refresh()
