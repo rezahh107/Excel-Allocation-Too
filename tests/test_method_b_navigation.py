@@ -3,8 +3,9 @@ from collections import Counter
 
 import pytest
 from openpyxl import load_workbook
-from PySide6.QtCore import QCoreApplication, QEvent, QTimer
+from PySide6.QtCore import QCoreApplication, QEvent, QTimer, Qt
 from PySide6.QtWidgets import QApplication, QMessageBox, QWizard
+from PySide6.QtTest import QTest
 
 from app.services.allocation_service import allocate
 from app.ui.main_window import MainWindow
@@ -126,6 +127,24 @@ def test_real_modal_cancel_approval_export_then_undo_redo(window, tmp_path):
     assert not state.export_eligible()
     assert out.read_bytes() == previous_bytes
 
+    # Legitimate recovery after the same invalidation must remain possible.
+    wizard.setCurrentId(ids[3])
+    wizard.next()
+    assert wizard.currentId() == ids[4] and state.preview_reviewed
+    QTimer.singleShot(0, lambda: _answer_dialog(True))
+    wizard.s5.run_btn.click()
+    _APP.processEvents()
+    assert state.export_eligible() and wizard.currentId() == ids[5]
+    recovered = tmp_path / "reapproved.xlsx"
+    wizard.s6.path.setText(str(recovered))
+    wizard.s6.export_btn.click()
+    assert recovered.is_file()
+    new_book = load_workbook(recovered)
+    assert [r[6] for r in list(new_book.active.values)[1:]] == [
+        state.result.mentor_for_student(i) for i in range(121)
+    ]
+    new_book.close()
+
 
 def test_input_mutation_inside_modal_cannot_approve(window, tmp_path):
     wizard = window.wizard
@@ -163,3 +182,33 @@ def test_restored_step_six_cannot_bypass_model(window, tmp_path):
     wizard.s6.path.setText(str(out))
     wizard.s6.export()
     assert not out.exists()
+
+
+def test_real_ctrl_s_shortcut_cannot_publish_unapproved_result(window, monkeypatch, tmp_path):
+    wizard = window.wizard
+    state = _unapproved_result(window)
+    dest = tmp_path / "ctrl-s-denied.xlsx"
+    wizard.s6.path.setText(str(dest))
+    monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: QMessageBox.StandardButton.No)
+
+    # The MainWindow shortcut must work in Normal mode without opening export.
+    window._switch_to_normal()
+    assert window.stack.currentWidget() is window.normal_workspace
+    window.activateWindow()
+    _APP.processEvents()
+    QTest.keyClick(window.normal_workspace, Qt.Key.Key_S, Qt.KeyboardModifier.ControlModifier)
+    _APP.processEvents()
+    assert window.stack.currentWidget() is wizard
+    assert not state.export_eligible()
+    assert not dest.exists()
+
+    # The wizard's own Ctrl+S shortcut must surface the approval warning.
+    window._switch_to_wizard()
+    wizard.toast.hide()
+    wizard.toast.clear()
+    wizard.activateWindow()
+    _APP.processEvents()
+    QTest.keyClick(wizard, Qt.Key.Key_S, Qt.KeyboardModifier.ControlModifier)
+    _APP.processEvents()
+    assert "تأیید" in wizard.toast.text()
+    assert not dest.exists()
