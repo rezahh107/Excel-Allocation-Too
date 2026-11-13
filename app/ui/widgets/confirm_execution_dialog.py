@@ -1,4 +1,4 @@
-"""Confirmation dialog shown before executing allocation.
+"""Confirmation dialog shown before approving the reviewed allocation.
 
 The dialog is intentionally defensive: it can summarize either an already
 simulated AllocationResult from Step4 or raw students/mentors built right
@@ -39,7 +39,7 @@ class _ExecutionSummary:
 
 
 class ConfirmExecutionDialog(QDialog):
-    """Final confirmation dialog before running Step5."""
+    """Final confirmation dialog for the existing Step4 allocation."""
 
     def __init__(
         self,
@@ -51,7 +51,7 @@ class ConfirmExecutionDialog(QDialog):
         super().__init__(parent)
         apply_rtl(self)
 
-        self.setWindowTitle("تأیید اجرای تخصیص")
+        self.setWindowTitle("تأیید نتیجه تخصیص")
         self.setModal(True)
         self.setMinimumWidth(520)
 
@@ -60,7 +60,7 @@ class ConfirmExecutionDialog(QDialog):
         lay = QVBoxLayout(self)
         lay.setSpacing(10)
 
-        title = QLabel("آیا از اجرای تخصیص با تنظیمات زیر مطمئن هستید؟")
+        title = QLabel("آیا تخصیص بررسی‌شده زیر را تأیید می‌کنید؟")
         title.setObjectName("dialog_title")
         title.setWordWrap(True)
         title.setStyleSheet(
@@ -71,8 +71,8 @@ class ConfirmExecutionDialog(QDialog):
         lay.addWidget(title)
 
         subtitle = QLabel(
-            "این مرحله عملیات اصلی تخصیص را اجرا می‌کند. "
-            "قبل از ادامه، خلاصه زیر را بررسی کنید."
+            "تخصیص در مرحله پیش‌نمایش محاسبه شده است. "
+            "این تأیید، مجوز خروجی Excel همان نتیجه خواهد بود."
         )
         subtitle.setWordWrap(True)
         subtitle.setStyleSheet(f"color:{P.TEXT_MUTED};")
@@ -146,7 +146,7 @@ class ConfirmExecutionDialog(QDialog):
             | QDialogButtonBox.StandardButton.Ok
         )
         buttons.button(QDialogButtonBox.StandardButton.Ok).setText(
-            "تأیید و اجرا"
+            "تأیید نتیجه"
         )
         buttons.button(QDialogButtonBox.StandardButton.Cancel).setText(
             "لغو"

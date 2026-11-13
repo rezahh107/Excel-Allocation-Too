@@ -145,7 +145,7 @@ class NormalWorkspace(QWidget):
         center_lay.addLayout(row1)
 
         # row 2: manager fairness
-        self.manager_group = QGroupBox("وضعیت عدالت بین مدیرها")
+        self.manager_group = QGroupBox("آمار بار مدیرها (مشتق از راهنماها)")
         mgr_grid = QGridLayout(self.manager_group)
         mgr_grid.setSpacing(8)
         self.card_mgr_min = _MetricCard("کمترین بار مدیر")
@@ -226,8 +226,8 @@ class NormalWorkspace(QWidget):
         hints = QLabel(
             "برای ویرایش جزئی هر بخش، روی آیتم مربوطه دوبار کلیک "
             "کنید تا همان مرحله در ویزارد باز شود.\n\n"
-            "برای عدالت بین مدیرها در مرحله تنظیمات،\n"
-            "گزینه «متعادل بین مدیرها و پشتیبان‌ها» را انتخاب کنید."
+            "سهم مدیر از مجموع تخصیص‌های راهنماهایش به‌دست می‌آید؛\n"
+            "برابری باید میان تمام راهنماها سنجیده شود."
         )
         hints.setWordWrap(True)
         hints.setObjectName("lbl_muted")
@@ -246,6 +246,15 @@ class NormalWorkspace(QWidget):
     def _open_nav_item(self, item: QListWidgetItem) -> None:
         page_index = item.data(Qt.ItemDataRole.UserRole)
         if isinstance(page_index, int):
+            if page_index == 5 and not self.wizard_ref.state.export_eligible():
+                QMessageBox.warning(
+                    self, "خروجی تأیید نشده",
+                    "ابتدا پیش‌نمایش و تأیید معتبر را تکمیل کنید.",
+                )
+                self.requestWizardMode.emit(
+                    3 if self.wizard_ref.state.result is not None else 0
+                )
+                return
             self.requestWizardMode.emit(page_index)
 
     def _quick_run(self) -> None:
@@ -267,17 +276,20 @@ class NormalWorkspace(QWidget):
         self.requestWizardMode.emit(4)
 
     def _quick_export(self) -> None:
-        if self.wizard_ref.state.result is None:
+        if not self.wizard_ref.state.export_eligible():
             QMessageBox.warning(
-                self, "نتیجه موجود نیست",
-                "ابتدا تخصیص را اجرا کنید.",
+                self, "خروجی تأیید نشده",
+                "ابتدا پیش‌نمایش و تأیید معتبر را تکمیل کنید.",
             )
-            self.requestWizardMode.emit(4)
+            self.requestWizardMode.emit(
+                3 if self.wizard_ref.state.result is not None else 0
+            )
             return
         self.requestExport.emit()
 
     def refresh(self) -> None:
         state = self.wizard_ref.state
+        self.export_btn.setEnabled(state.export_eligible())
         students_count = len(state.book2_rows) if state.book2_rows else 0
         mentors_count = len(state.book1_rows) if state.book1_rows else 0
 
@@ -302,12 +314,8 @@ class NormalWorkspace(QWidget):
                 self.card_mgr_min.set_value(str(mgr["min_load"]))
                 self.card_mgr_max.set_value(str(mgr["max_load"]))
                 self.card_mgr_dev.set_value(str(mgr["max_deviation"]))
-                if mgr["is_balanced"]:
-                    self.card_mgr_bal.set_value("✅ متعادل")
-                    self.card_mgr_bal.set_color(P.SUCCESS_LIGHT)
-                else:
-                    self.card_mgr_bal.set_value("⚠ نامتعادل")
-                    self.card_mgr_bal.set_color(P.WARNING_LIGHT)
+                self.card_mgr_bal.set_value("سهم مستقل ندارد")
+                self.card_mgr_bal.set_color(P.TEXT_MUTED)
 
                 self.manager_status.setText(
                     "📊 مدیرها\n"
@@ -356,6 +364,8 @@ class NormalWorkspace(QWidget):
                 "📊 نتیجه\n✅ تخصیص موجود\n"
                 f"ظرفیت: {state.result.capacity}\n"
                 f"بار پشتیبان: {min_l}–{max_l}\n"
+                f"تخصیص جدید: {state.result.num_new}\n"
+                f"تثبیت‌نشده: {state.result.num_non_stabilized}\n"
                 f"جابه‌جا شده: {state.result.num_moved}"
             )
         else:
@@ -370,5 +380,5 @@ class NormalWorkspace(QWidget):
             f"وضعیت فایل‌ها: "
             f"{'کامل' if book1_ok and book2_ok else 'ناقص'}\n"
             f"وضعیت خروجی: "
-            f"{'آماده' if state.result is not None else 'نیازمند اجرا'}"
+            f"{'آماده' if state.export_eligible() else 'نیازمند تأیید'}"
         )

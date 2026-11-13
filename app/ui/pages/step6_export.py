@@ -1,7 +1,9 @@
-"""Step 6 — export Excel + interactive HTML report with safety UX."""
+"""Step 6 — export an approved Excel workbook with safety UX."""
 from __future__ import annotations
 
 from datetime import datetime
+from tempfile import TemporaryDirectory
+import os
 from pathlib import Path
 
 from PySide6.QtWidgets import (
@@ -17,7 +19,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.core.models import WizardState
-from app.services.excel_service import export_excel, export_html_report
+from app.services.excel_service import export_excel
 from app.services.simulation_service import imbalance_report
 from app.utils.helpers import open_in_explorer
 from app.utils.rtl_utils import apply_rtl
@@ -37,12 +39,12 @@ class Step6Export(QWizardPage):
 
         path_bar = QHBoxLayout()
         self.path = QLineEdit(self._default_export_path())
-        browse = QPushButton("...")
-        browse.setFixedWidth(36)
-        browse.clicked.connect(self._browse)
+        self.browse_btn = QPushButton("...")
+        self.browse_btn.setFixedWidth(36)
+        self.browse_btn.clicked.connect(self._browse)
         path_bar.addWidget(QLabel("مسیر فایل:"))
         path_bar.addWidget(self.path)
-        path_bar.addWidget(browse)
+        path_bar.addWidget(self.browse_btn)
         lay.addLayout(path_bar)
 
         btn_bar = QHBoxLayout()
@@ -71,12 +73,37 @@ class Step6Export(QWizardPage):
         stats_lay.addWidget(self.summary)
 
         lay.addWidget(stats_grp)
+        self.legacy_warning = QLabel("")
+        self.legacy_warning.setWordWrap(True)
+        self.legacy_warning.setStyleSheet(f"color:{P.WARNING_LIGHT}")
+        self.legacy_warning.setAccessibleName("هشدار گزارش HTML قدیمی")
+        lay.addWidget(self.legacy_warning)
+        self.path.textChanged.connect(self._refresh_legacy_warning)
+        self._refresh_legacy_warning()
         lay.addStretch()
 
     # ── QWizardPage API ─────────────────────────────────────────
+    def refresh_eligibility(self) -> bool:
+        """Keep destination actions aligned with authoritative model state."""
+        eligible = self.state.export_eligible()
+        self.export_btn.setEnabled(eligible)
+        self.browse_btn.setEnabled(eligible)
+        self.path.setEnabled(eligible)
+        if not eligible:
+            self.open_btn.setEnabled(False)
+        return eligible
+
     def initializePage(self) -> None:  # noqa: N802
+        if not self.refresh_eligibility():
+            self.summary.setStyleSheet(f"color:{P.WARNING_LIGHT}")
+            self.summary.setText(
+                "⚠ خروجی فعلاً مجاز نیست؛ پیش‌نمایش را بررسی و نتیجه را تأیید کنید."
+            )
+            self.completeChanged.emit()
+            return
         if not self.path.text().strip():
             self.path.setText(self._default_export_path())
+        self._refresh_legacy_warning()
 
         result = self.state.result
         if result:
@@ -89,6 +116,8 @@ class Step6Export(QWizardPage):
                 f"ظرفیت: {rep['capacity']}  |  "
                 f"حداقل: {rep['min']}  |  حداکثر: {rep['max']}  |  "
                 f"میانگین: {rep['avg']}  |  "
+                f"تخصیص جدید: {result.num_new}  |  "
+                f"تثبیت‌نشده: {result.num_non_stabilized}  |  "
                 f"جابه‌جا شده: {result.num_moved}"
             )
         else:
@@ -96,7 +125,7 @@ class Step6Export(QWizardPage):
             self.summary.setText("⚠ هنوز نتیجه‌ای برای خروجی وجود ندارد.")
 
     def isComplete(self) -> bool:  # noqa: N802
-        return True
+        return self.state.export_eligible()
 
     # ── actions ─────────────────────────────────────────────────
     def _browse(self) -> None:
@@ -110,8 +139,14 @@ class Step6Export(QWizardPage):
             self.path.setText(path)
 
     def export(self) -> None:
-        """Write Excel workbook and HTML report to disk."""
-        result = self.state.result
+        """Write the approved Excel workbook to disk."""
+        self.refresh_eligibility()
+        try:
+            result = self.state.assert_current_result(require_approved=True)
+        except Exception as exc:
+            self.summary.setStyleSheet(f"color:{P.WARNING_LIGHT}")
+            self.summary.setText(f"⚠ خروجی ممنوع: {exc}")
+            return
         if not result:
             self.summary.setStyleSheet(f"color:{P.WARNING_LIGHT}")
             self.summary.setText("⚠ نتیجه‌ای برای خروجی وجود ندارد.")
@@ -119,6 +154,7 @@ class Step6Export(QWizardPage):
 
         out_path = self._normalize_output_path(self.path.text())
         self.path.setText(str(out_path))
+        self._refresh_legacy_warning()
 
         if out_path.exists():
             ans = QMessageBox.warning(
@@ -139,9 +175,13 @@ class Step6Export(QWizardPage):
         try:
             out_path.parent.mkdir(parents=True, exist_ok=True)
 
-            export_excel(result, mentor_manager, str(out_path))
-            html_path = out_path.with_name(out_path.stem + "_report.html")
-            export_html_report(result, str(html_path))
+            with TemporaryDirectory(dir=out_path.parent) as tmp:
+                excel_stage = Path(tmp) / "final.xlsx"
+                export_excel(result, mentor_manager, str(excel_stage))
+                # Recheck before publishing either output; no stale approval.
+                if result is not self.state.assert_current_result(require_approved=True):
+                    raise ValueError("نتیجه پس از تأیید تغییر کرده است.")
+                os.replace(excel_stage, out_path)
 
         except Exception as exc:  # noqa: BLE001
             msg = f"خطا در خروجی: {exc}"
@@ -154,18 +194,37 @@ class Step6Export(QWizardPage):
         self.open_btn.setEnabled(True)
         self.summary.setStyleSheet(f"color:{P.SUCCESS_LIGHT}")
         self.summary.setText(
-            f"✅ فایل اکسل ذخیره شد:\n{out_path}\n\n"
-            f"📄 گزارش HTML:\n{html_path}"
+            f"✅ فایل اکسل ذخیره شد:\n{out_path}"
         )
 
         if self.wizard() and hasattr(self.wizard(), "toast"):
             self.wizard().toast.show_message(
-                "خروجی با موفقیت ذخیره شد ✅",
+                "فایل Excel با موفقیت ذخیره شد ✅",
                 "success",
                 4000,
             )
 
     # ── helpers ────────────────────────────────────────────────
+    def _refresh_legacy_warning(self, _text: str = "") -> None:
+        """Disclose historical same-stem HTML without reading or modifying it."""
+        raw = self.path.text().strip()
+        if not raw:
+            self.legacy_warning.clear()
+            self.legacy_warning.setVisible(False)
+            return
+        excel_path = self._normalize_output_path(raw)
+        legacy_path = excel_path.with_name(excel_path.stem + "_report.html")
+        if legacy_path.is_file():
+            self.legacy_warning.setText(
+                f"⚠ گزارش HTML قدیمی وجود دارد: {legacy_path}\n"
+                "این فایل متعلق به گردش‌کار قبلی است، به‌روزرسانی نمی‌شود "
+                "و نباید گزارش تخصیص فعلی تلقی شود. فقط Excel جدید معتبر است."
+            )
+            self.legacy_warning.setVisible(True)
+        else:
+            self.legacy_warning.clear()
+            self.legacy_warning.setVisible(False)
+
     @staticmethod
     def _default_export_path() -> str:
         desktop = Path.home() / "Desktop"
@@ -180,7 +239,7 @@ class Step6Export(QWizardPage):
 
         path = Path(text).expanduser()
 
-        if not path.suffix:
+        if path.suffix.lower() != ".xlsx":
             path = path.with_suffix(".xlsx")
 
         if not path.is_absolute():

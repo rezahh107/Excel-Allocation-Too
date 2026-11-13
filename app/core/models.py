@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import hashlib
+import json
 from enum import Enum
 from typing import Optional
 
@@ -73,11 +75,16 @@ OPTIONAL_BOOK2: frozenset[Role] = frozenset({
     Role.GRADE,
     Role.CAPACITY,
     Role.MANAGER_NAME,
+    Role.INITIAL_SUPPORTER,
+    Role.COUNTER,
+    Role.GROUP,
+    Role.SMANAGER,
 })
 
 # Roles required in Book1 (mentors)
 REQUIRED_BOOK1: frozenset[Role] = frozenset({
     Role.MENTOR_NAME,
+    Role.MANAGER_NAME,
 })
 
 # Roles required in Book2 (students)
@@ -91,6 +98,8 @@ class Student:
     counter: str = ""
     first: str = ""
     last: str = ""
+    group: str = ""
+    manager: str = ""
     initial_supporter: str = ""
     grade: str = ""
     phone: str = ""
@@ -106,7 +115,7 @@ class Student:
 class Mentor:
     name: str = ""
     manager: str = ""
-    capacity: int = 0
+    capacity: int | None = None
     raw: dict = field(default_factory=dict)
 
 
@@ -118,8 +127,87 @@ class AllocationResult:
     fairness: FairnessMode = FairnessMode.ROUND_ROBIN
     stabilized: set[int] = field(default_factory=set)
     assigned: dict[str, list[int]] = field(default_factory=dict)
-    num_moved: int = 0
     rebalance_moves: int = 0
+    # A reviewed result is the only possible source of a final export.
+    approved_assignment_snapshot: tuple | None = field(default=None, repr=False)
+
+    def assignment_snapshot(self) -> tuple:
+        return tuple(
+            (name, tuple(indices))
+            for name, indices in sorted(self.assigned.items())
+        )
+
+    def approval_snapshot(self) -> tuple:
+        """Freeze exactly the fields consumed by exports, including provenance."""
+        student_rows = tuple(
+            (s.counter, s.first, s.last, s.group, s.manager,
+             s.initial_supporter, s.grade, s.phone)
+            for s in self.students
+        )
+        mentor_rows = tuple(
+            (m.name, m.manager, m.capacity) for m in self.mentors
+        )
+        return (
+            self.assignment_snapshot(), student_rows, mentor_rows,
+            self.capacity, self.fairness, tuple(sorted(self.stabilized)),
+            self.num_moved,
+        )
+
+    def mark_approved(self) -> None:
+        from app.core.validation import ensure_result_valid
+        ensure_result_valid(self)
+        self.approved_assignment_snapshot = self.approval_snapshot()
+
+    def assert_approved(self) -> None:
+        from app.core.validation import ValidationError, ensure_result_valid
+        ensure_result_valid(self)
+        if (self.approved_assignment_snapshot is None
+                or self.approval_snapshot() != self.approved_assignment_snapshot):
+            raise ValidationError("نتیجه تأیید نشده یا پس از تأیید تغییر کرده است.")
+
+    def mentor_for_student(self, index: int) -> str:
+        for name, indices in self.assigned.items():
+            if index in indices:
+                return name
+        raise ValueError(f"دانش‌آموز داخلی {index} فاقد تخصیص است.")
+
+    def movement_counts(self) -> dict[str, int]:
+        """Compare imported mentor labels with the *current* allocation.
+
+        This is not a real-world student or mentor identity assertion.
+        """
+        counts = {"new": 0, "unchanged": 0, "changed": 0}
+        for index, student in enumerate(self.students):
+            initial = student.initial_supporter.strip().casefold()
+            if not initial:
+                counts["new"] += 1
+            elif initial == self.mentor_for_student(index).strip().casefold():
+                counts["unchanged"] += 1
+            else:
+                counts["changed"] += 1
+        return counts
+
+    @property
+    def num_moved(self) -> int:
+        """Actual changes from a nonempty imported initial-mentor label."""
+        return self.movement_counts()["changed"]
+
+    @property
+    def num_new(self) -> int:
+        return self.movement_counts()["new"]
+
+    @property
+    def num_non_stabilized(self) -> int:
+        return self.total_students - len(self.stabilized)
+
+    def mentor_capacity(self, mentor_name: str) -> int:
+        """Effective mentor limit carried by this validated allocation."""
+        for mentor in self.mentors:
+            if mentor.name == mentor_name:
+                if type(mentor.capacity) is not int or mentor.capacity < 0:
+                    raise ValueError("ظرفیت مؤثر پشتیبان نامعتبر است.")
+                return mentor.capacity
+        raise ValueError(f"پشتیبان نامعتبر است: {mentor_name!r}")
 
     @property
     def total_students(self) -> int:
@@ -168,6 +256,10 @@ class WizardState:
     book2_path: str = ""
     book1_rows: list[dict] = field(default_factory=list)
     book2_rows: list[dict] = field(default_factory=list)
+    book1_headers: list[str] = field(default_factory=list)
+    book2_headers: list[str] = field(default_factory=list)
+    saved_map1: dict[str, str] = field(default_factory=dict)
+    saved_map2: dict[str, str] = field(default_factory=dict)
     map1: dict[str, Role] = field(default_factory=dict)
     map2: dict[str, Role] = field(default_factory=dict)
     map_errors: list[str] = field(default_factory=list)
@@ -175,3 +267,42 @@ class WizardState:
     capacity_override: Optional[int] = None
     stabilize_initial: bool = True
     result: Optional[AllocationResult] = None
+    result_input_signature: str | None = None
+    preview_reviewed: bool = False
+
+    def input_signature(self) -> str:
+        """Fingerprint imported data, mappings and settings (not real IDs)."""
+        payload = {
+            "book1": self.book1_rows, "book2": self.book2_rows,
+            "map1": {k: v.value for k, v in self.map1.items()},
+            "map2": {k: v.value for k, v in self.map2.items()},
+            "mode": self.fairness.value,
+            "capacity": self.capacity_override,
+            "stabilize": self.stabilize_initial,
+        }
+        canonical = json.dumps(payload, sort_keys=True, ensure_ascii=False, default=str)
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+    def invalidate_result(self) -> None:
+        self.result = None
+        self.result_input_signature = None
+        self.preview_reviewed = False
+
+    def assert_current_result(self, require_approved: bool = False) -> AllocationResult:
+        from app.core.validation import ValidationError, ensure_result_valid
+        if (self.result is None or self.result_input_signature is None
+                or self.result_input_signature != self.input_signature()):
+            raise ValidationError("پیش‌نمایش قدیمی است؛ تخصیص را دوباره بررسی کنید.")
+        ensure_result_valid(self.result)
+        if require_approved:
+            self.result.assert_approved()
+        return self.result
+
+    def export_eligible(self) -> bool:
+        """UI admission must use the model's current-result and approval checks."""
+        from app.core.validation import ValidationError
+        try:
+            self.assert_current_result(require_approved=True)
+        except ValidationError:
+            return False
+        return True

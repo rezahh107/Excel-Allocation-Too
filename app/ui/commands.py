@@ -31,8 +31,7 @@ class ReassignCommand(QUndoCommand):
     def _apply(self, frm: str, to: str) -> None:
         if frm and self._idx in self._result.assigned.get(frm, []):
             self._result.assigned[frm].remove(self._idx)
-        self._result.assigned.setdefault(to, []).append(self._idx)
-        self._result.students[self._idx].final_supporter = to
+        self._result.assigned[to].append(self._idx)
         log.debug("انتقال: idx=%d  %s → %s", self._idx, frm, to)
         self._on_change()
 

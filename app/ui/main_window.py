@@ -160,7 +160,7 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence("Ctrl+1"), self, self._switch_to_wizard)
         QShortcut(QKeySequence("Ctrl+2"), self, self._switch_to_normal)
         QShortcut(QKeySequence("Ctrl+O"), self, lambda: self._open_wizard_page(0))
-        QShortcut(QKeySequence("Ctrl+S"), self, self._export_from_normal)
+        self._export_shortcut = QShortcut(QKeySequence("Ctrl+S"), self, self._export_from_normal)
         QShortcut(QKeySequence("F5"), self, self._run_from_toolbar)
         QShortcut(QKeySequence("F1"), self, self._show_help)
 
@@ -168,6 +168,8 @@ class MainWindow(QMainWindow):
     def _switch_mode_from_combo(self) -> None:
         """Switch central widget based on combo selection."""
         mode = self.mode_combo.currentData()
+        # The embedded wizard has its own Ctrl+S; avoid duplicate shortcuts.
+        self._export_shortcut.setEnabled(mode == self.MODE_NORMAL)
 
         if mode == self.MODE_NORMAL:
             self.stack.setCurrentWidget(self.normal_workspace)
@@ -195,6 +197,9 @@ class MainWindow(QMainWindow):
 
     def _on_mode_changed(self, _index: int) -> None:
         """Synchronise combo and status after stacked widget changes."""
+        self._export_shortcut.setEnabled(
+            self.stack.currentWidget() is self.normal_workspace
+        )
         if self.stack.currentWidget() is self.normal_workspace:
             idx = self.mode_combo.findData(self.MODE_NORMAL)
             self.normal_workspace.refresh()
@@ -216,6 +221,11 @@ class MainWindow(QMainWindow):
             -1 means switch to wizard without changing current page.
              0..5 navigates to the respective wizard page.
         """
+        if page_index == 5 and not self.wizard.state.export_eligible():
+            page_index = 3 if self.wizard.state.result is not None else 0
+            self.statusBar().showMessage(
+                "خروجی نیازمند پیش‌نمایش و تأیید معتبر است.", 4000
+            )
         self.stack.setCurrentWidget(self.wizard)
 
         idx = self.mode_combo.findData(self.MODE_WIZARD)
@@ -271,13 +281,13 @@ class MainWindow(QMainWindow):
 
     def _export_from_normal(self) -> None:
         """Use the existing Step6 export behaviour."""
-        if self.wizard.state.result is None:
+        if not self.wizard.state.export_eligible():
             QMessageBox.warning(
                 self,
-                "نتیجه موجود نیست",
-                "ابتدا تخصیص را اجرا کنید.",
+                "خروجی تأیید نشده",
+                "نتیجه فعلی تأیید معتبر ندارد؛ ابتدا پیش‌نمایش را بررسی و تأیید کنید.",
             )
-            self._open_wizard_page(4)
+            self._open_wizard_page(3 if self.wizard.state.result is not None else 0)
             return
 
         page_ids = self.wizard.pageIds()
@@ -329,9 +339,11 @@ class MainWindow(QMainWindow):
             "پشتیبان: —"
         )
 
+        self.btn_export.setEnabled(state.export_eligible())
+        self.wizard.s6.refresh_eligibility()
         if state.result is not None:
             self.sb_result.setText(
-                f"نتیجه: آماده · ظرفیت {state.result.capacity}"
+                f"نتیجه: {'تأییدشده' if state.export_eligible() else 'پیش‌نمایش'} · ظرفیت {state.result.capacity}"
             )
         else:
             self.sb_result.setText("نتیجه: —")

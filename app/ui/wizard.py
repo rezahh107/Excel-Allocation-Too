@@ -6,7 +6,7 @@ import json
 import os
 from pathlib import Path
 
-from PySide6.QtCore import QSettings, Qt
+from PySide6.QtCore import QSettings, Qt, QTimer
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QFileDialog,
@@ -101,6 +101,56 @@ class AllocationWizard(QWizard):
         self.s1.restore_paths()
         self.refresh_status()
 
+    def setCurrentId(self, page_id: int) -> None:  # noqa: N802
+        """Guard direct Python requests for the protected export page."""
+        ids = self.pageIds()
+        if len(ids) >= 6 and page_id == ids[5] and not self.state.export_eligible():
+            self._leave_invalid_export()
+            if hasattr(self, "toast"):
+                self.toast.show_message(
+                    "خروجی نیازمند پیش‌نمایش و تأیید معتبر است.", "warning"
+                )
+            return
+        # Qt setCurrentId validates even when navigating BACK. An unapproved
+        # Step 5 must not trap the user there; native back() safely unwinds
+        # already visited pages without treating navigation as confirmation.
+        if (len(ids) >= 5 and self.currentId() == ids[4]
+                and page_id < ids[4] and self.hasVisitedPage(page_id)
+                and not self.state.export_eligible()):
+            while self.currentId() != page_id:
+                previous_id = self.currentId()
+                self.back()
+                if self.currentId() == previous_id:
+                    break
+            if self.currentId() == page_id:
+                return
+        super().setCurrentId(page_id)
+
+    def _leave_invalid_export(self) -> None:
+        """Protect native Qt transitions that bypass Python navigation callers."""
+        ids = self.pageIds()
+        if len(ids) < 6 or self.currentId() != ids[5]:
+            return
+        if self.state.export_eligible():
+            return
+        fallback = ids[3] if self.state.result is not None else ids[0]
+        # setCurrentId() moves backward without unwinding Qt's visited history;
+        # next() then rejects the old Step 5 as an "already met" page.
+        # Use native Back until the last reviewed page; if it was never
+        # visited (direct Step 6 jump), recover to the first visited page.
+        history = self.visitedIds()
+        if fallback not in history:
+            fallback = history[0]
+        while self.currentId() != fallback and len(self.visitedIds()) > 1:
+            previous = self.currentId()
+            self.back()
+            if self.currentId() == previous:
+                break
+        if hasattr(self, "toast"):
+            self.toast.show_message(
+                "تأیید خروجی نامعتبر است؛ پیش‌نمایش را بررسی کنید.", "warning"
+            )
+
     # ── status bar (C1) ─────────────────────────────────────────
     def _build_status_bar(self) -> None:
         self._sb_students = QLabel("دانش‌آموز: —")
@@ -148,6 +198,9 @@ class AllocationWizard(QWizard):
 
     def refresh_status(self) -> None:
         s = self.state
+        if hasattr(self, "s6"):
+            self.s6.refresh_eligibility()
+            self._leave_invalid_export()
         self._sb_students.setText(
             f"دانش‌آموز: {len(s.book2_rows)}" if s.book2_rows else "دانش‌آموز: —"
         )
@@ -157,7 +210,7 @@ class AllocationWizard(QWizard):
 
         if s.result:
             self._sb_capacity.setText(f"ظرفیت: {s.result.capacity}")
-            self._sb_state.setText("✅  آماده خروجی")
+            self._sb_state.setText("✅  آماده خروجی" if s.export_eligible() else "⏳ در انتظار تأیید")
             self._sb_state.setStyleSheet(
                 f"color:{P.SUCCESS_LIGHT};font-weight:bold;padding:3px 8px;font-size:12px;"
             )
@@ -180,6 +233,10 @@ class AllocationWizard(QWizard):
 
     # ── smart tooltip on Next (C2) ──────────────────────────────
     def _on_page_changed(self, page_id: int) -> None:
+        ids = self.pageIds()
+        if len(ids) >= 6 and page_id == ids[5] and not self.state.export_eligible():
+            # Step 6 disables actions synchronously; leave it after Qt's signal.
+            QTimer.singleShot(0, self._leave_invalid_export)
         page = self.currentPage()
         next_btn = self.button(QWizard.WizardButton.NextButton)
         if next_btn is None or page is None:
@@ -229,8 +286,8 @@ class AllocationWizard(QWizard):
             self.save_project()
 
     def _global_export(self) -> None:
-        if self.state.result is None:
-            self.toast.show_message("ابتدا تخصیص را اجرا کنید (مرحله ۵).", "warning")
+        if not self.state.export_eligible():
+            self.toast.show_message("ابتدا پیش‌نمایش را بررسی و تخصیص را تأیید کنید.", "warning")
             return
         self.s6.export()
 
@@ -373,7 +430,7 @@ class AllocationWizard(QWizard):
                 self.state.capacity_override = None
 
         self.state.stabilize_initial = bool(data.get("stabilize_initial", True))
-        self.state.result = None
+        self.state.invalidate_result()
         self.state.map_errors = []
 
         self._reload_rows_from_paths()
@@ -408,8 +465,12 @@ class AllocationWizard(QWizard):
             if not path:
                 return []
             try:
-                rows = load_table(path)
-                return rows if isinstance(rows, list) else []
+                headers, rows = load_table(path)
+                if label == "Book1":
+                    self.state.book1_headers = headers
+                else:
+                    self.state.book2_headers = headers
+                return rows
             except Exception as exc:
                 warnings.append(f"{label}: {exc}")
                 return []

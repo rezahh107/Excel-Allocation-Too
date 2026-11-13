@@ -46,6 +46,7 @@ class Step1Load(QWizardPage):
             zone.set_status(f"❌ خطا: {exc}")
             self._notify_toast("error", f"خطا در بارگذاری: {exc}")
             return
+        self.state.invalidate_result()
         zone = self.zone1 if which == 1 else self.zone2
         if which == 1:
             self.state.book1_path    = path
