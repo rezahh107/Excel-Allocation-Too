@@ -297,3 +297,12 @@ class WizardState:
         if require_approved:
             self.result.assert_approved()
         return self.result
+
+    def export_eligible(self) -> bool:
+        """UI admission must use the model's current-result and approval checks."""
+        from app.core.validation import ValidationError
+        try:
+            self.assert_current_result(require_approved=True)
+        except ValidationError:
+            return False
+        return True

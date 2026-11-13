@@ -246,6 +246,15 @@ class NormalWorkspace(QWidget):
     def _open_nav_item(self, item: QListWidgetItem) -> None:
         page_index = item.data(Qt.ItemDataRole.UserRole)
         if isinstance(page_index, int):
+            if page_index == 5 and not self.wizard_ref.state.export_eligible():
+                QMessageBox.warning(
+                    self, "خروجی تأیید نشده",
+                    "ابتدا پیش‌نمایش و تأیید معتبر را تکمیل کنید.",
+                )
+                self.requestWizardMode.emit(
+                    3 if self.wizard_ref.state.result is not None else 0
+                )
+                return
             self.requestWizardMode.emit(page_index)
 
     def _quick_run(self) -> None:
@@ -267,17 +276,20 @@ class NormalWorkspace(QWidget):
         self.requestWizardMode.emit(4)
 
     def _quick_export(self) -> None:
-        if self.wizard_ref.state.result is None:
+        if not self.wizard_ref.state.export_eligible():
             QMessageBox.warning(
-                self, "نتیجه موجود نیست",
-                "ابتدا تخصیص را اجرا کنید.",
+                self, "خروجی تأیید نشده",
+                "ابتدا پیش‌نمایش و تأیید معتبر را تکمیل کنید.",
             )
-            self.requestWizardMode.emit(4)
+            self.requestWizardMode.emit(
+                3 if self.wizard_ref.state.result is not None else 0
+            )
             return
         self.requestExport.emit()
 
     def refresh(self) -> None:
         state = self.wizard_ref.state
+        self.export_btn.setEnabled(state.export_eligible())
         students_count = len(state.book2_rows) if state.book2_rows else 0
         mentors_count = len(state.book1_rows) if state.book1_rows else 0
 
@@ -368,5 +380,5 @@ class NormalWorkspace(QWidget):
             f"وضعیت فایل‌ها: "
             f"{'کامل' if book1_ok and book2_ok else 'ناقص'}\n"
             f"وضعیت خروجی: "
-            f"{'آماده' if state.result is not None else 'نیازمند اجرا'}"
+            f"{'آماده' if state.export_eligible() else 'نیازمند تأیید'}"
         )

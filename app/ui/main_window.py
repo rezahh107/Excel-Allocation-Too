@@ -216,6 +216,11 @@ class MainWindow(QMainWindow):
             -1 means switch to wizard without changing current page.
              0..5 navigates to the respective wizard page.
         """
+        if page_index == 5 and not self.wizard.state.export_eligible():
+            page_index = 4 if self.wizard.state.result is not None else 0
+            self.statusBar().showMessage(
+                "خروجی نیازمند پیش‌نمایش و تأیید معتبر است.", 4000
+            )
         self.stack.setCurrentWidget(self.wizard)
 
         idx = self.mode_combo.findData(self.MODE_WIZARD)
@@ -271,13 +276,13 @@ class MainWindow(QMainWindow):
 
     def _export_from_normal(self) -> None:
         """Use the existing Step6 export behaviour."""
-        if self.wizard.state.result is None:
+        if not self.wizard.state.export_eligible():
             QMessageBox.warning(
                 self,
-                "نتیجه موجود نیست",
-                "ابتدا تخصیص را اجرا کنید.",
+                "خروجی تأیید نشده",
+                "نتیجه فعلی تأیید معتبر ندارد؛ ابتدا پیش‌نمایش را بررسی و تأیید کنید.",
             )
-            self._open_wizard_page(4)
+            self._open_wizard_page(3 if self.wizard.state.result is not None else 0)
             return
 
         page_ids = self.wizard.pageIds()
@@ -329,9 +334,11 @@ class MainWindow(QMainWindow):
             "پشتیبان: —"
         )
 
+        self.btn_export.setEnabled(state.export_eligible())
+        self.wizard.s6.refresh_eligibility()
         if state.result is not None:
             self.sb_result.setText(
-                f"نتیجه: {'تأییدشده' if state.result.approved_assignment_snapshot is not None else 'پیش‌نمایش'} · ظرفیت {state.result.capacity}"
+                f"نتیجه: {'تأییدشده' if state.export_eligible() else 'پیش‌نمایش'} · ظرفیت {state.result.capacity}"
             )
         else:
             self.sb_result.setText("نتیجه: —")

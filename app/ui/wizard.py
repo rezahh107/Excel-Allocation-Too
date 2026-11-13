@@ -6,7 +6,7 @@ import json
 import os
 from pathlib import Path
 
-from PySide6.QtCore import QSettings, Qt
+from PySide6.QtCore import QSettings, Qt, QTimer
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QFileDialog,
@@ -101,6 +101,32 @@ class AllocationWizard(QWizard):
         self.s1.restore_paths()
         self.refresh_status()
 
+    def setCurrentId(self, page_id: int) -> None:  # noqa: N802
+        """Guard direct Python requests for the protected export page."""
+        ids = self.pageIds()
+        if len(ids) >= 6 and page_id == ids[5] and not self.state.export_eligible():
+            self._leave_invalid_export()
+            if hasattr(self, "toast"):
+                self.toast.show_message(
+                    "خروجی نیازمند پیش‌نمایش و تأیید معتبر است.", "warning"
+                )
+            return
+        super().setCurrentId(page_id)
+
+    def _leave_invalid_export(self) -> None:
+        """Protect native Qt transitions that bypass Python navigation callers."""
+        ids = self.pageIds()
+        if len(ids) < 6 or self.currentId() != ids[5]:
+            return
+        if self.state.export_eligible():
+            return
+        fallback = ids[4] if self.state.result is not None else ids[0]
+        QWizard.setCurrentId(self, fallback)
+        if hasattr(self, "toast"):
+            self.toast.show_message(
+                "تأیید خروجی نامعتبر است؛ پیش‌نمایش را بررسی کنید.", "warning"
+            )
+
     # ── status bar (C1) ─────────────────────────────────────────
     def _build_status_bar(self) -> None:
         self._sb_students = QLabel("دانش‌آموز: —")
@@ -148,6 +174,9 @@ class AllocationWizard(QWizard):
 
     def refresh_status(self) -> None:
         s = self.state
+        if hasattr(self, "s6"):
+            self.s6.refresh_eligibility()
+            self._leave_invalid_export()
         self._sb_students.setText(
             f"دانش‌آموز: {len(s.book2_rows)}" if s.book2_rows else "دانش‌آموز: —"
         )
@@ -157,7 +186,7 @@ class AllocationWizard(QWizard):
 
         if s.result:
             self._sb_capacity.setText(f"ظرفیت: {s.result.capacity}")
-            self._sb_state.setText("✅  آماده خروجی" if s.result.approved_assignment_snapshot is not None else "⏳ در انتظار تأیید")
+            self._sb_state.setText("✅  آماده خروجی" if s.export_eligible() else "⏳ در انتظار تأیید")
             self._sb_state.setStyleSheet(
                 f"color:{P.SUCCESS_LIGHT};font-weight:bold;padding:3px 8px;font-size:12px;"
             )
@@ -180,6 +209,10 @@ class AllocationWizard(QWizard):
 
     # ── smart tooltip on Next (C2) ──────────────────────────────
     def _on_page_changed(self, page_id: int) -> None:
+        ids = self.pageIds()
+        if len(ids) >= 6 and page_id == ids[5] and not self.state.export_eligible():
+            # Step 6 disables actions synchronously; leave it after Qt's signal.
+            QTimer.singleShot(0, self._leave_invalid_export)
         page = self.currentPage()
         next_btn = self.button(QWizard.WizardButton.NextButton)
         if next_btn is None or page is None:
@@ -229,8 +262,8 @@ class AllocationWizard(QWizard):
             self.save_project()
 
     def _global_export(self) -> None:
-        if self.state.result is None:
-            self.toast.show_message("ابتدا تخصیص را اجرا کنید (مرحله ۵).", "warning")
+        if not self.state.export_eligible():
+            self.toast.show_message("ابتدا پیش‌نمایش را بررسی و تخصیص را تأیید کنید.", "warning")
             return
         self.s6.export()
 

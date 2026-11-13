@@ -39,12 +39,12 @@ class Step6Export(QWizardPage):
 
         path_bar = QHBoxLayout()
         self.path = QLineEdit(self._default_export_path())
-        browse = QPushButton("...")
-        browse.setFixedWidth(36)
-        browse.clicked.connect(self._browse)
+        self.browse_btn = QPushButton("...")
+        self.browse_btn.setFixedWidth(36)
+        self.browse_btn.clicked.connect(self._browse)
         path_bar.addWidget(QLabel("مسیر فایل:"))
         path_bar.addWidget(self.path)
-        path_bar.addWidget(browse)
+        path_bar.addWidget(self.browse_btn)
         lay.addLayout(path_bar)
 
         btn_bar = QHBoxLayout()
@@ -83,7 +83,24 @@ class Step6Export(QWizardPage):
         lay.addStretch()
 
     # ── QWizardPage API ─────────────────────────────────────────
+    def refresh_eligibility(self) -> bool:
+        """Keep destination actions aligned with authoritative model state."""
+        eligible = self.state.export_eligible()
+        self.export_btn.setEnabled(eligible)
+        self.browse_btn.setEnabled(eligible)
+        self.path.setEnabled(eligible)
+        if not eligible:
+            self.open_btn.setEnabled(False)
+        return eligible
+
     def initializePage(self) -> None:  # noqa: N802
+        if not self.refresh_eligibility():
+            self.summary.setStyleSheet(f"color:{P.WARNING_LIGHT}")
+            self.summary.setText(
+                "⚠ خروجی فعلاً مجاز نیست؛ پیش‌نمایش را بررسی و نتیجه را تأیید کنید."
+            )
+            self.completeChanged.emit()
+            return
         if not self.path.text().strip():
             self.path.setText(self._default_export_path())
         self._refresh_legacy_warning()
@@ -108,7 +125,7 @@ class Step6Export(QWizardPage):
             self.summary.setText("⚠ هنوز نتیجه‌ای برای خروجی وجود ندارد.")
 
     def isComplete(self) -> bool:  # noqa: N802
-        return True
+        return self.state.export_eligible()
 
     # ── actions ─────────────────────────────────────────────────
     def _browse(self) -> None:
@@ -123,6 +140,7 @@ class Step6Export(QWizardPage):
 
     def export(self) -> None:
         """Write the approved Excel workbook to disk."""
+        self.refresh_eligibility()
         try:
             result = self.state.assert_current_result(require_approved=True)
         except Exception as exc:

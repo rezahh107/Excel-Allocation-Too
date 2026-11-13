@@ -1,9 +1,8 @@
 """Actual PySide6 offscreen smoke for review -> final -> local export.
 
-Offscreen is not Windows operator acceptance; it does exercise real Qt signals,
-page constructors, the worker and the workbook output.
+Offscreen is not Windows operator acceptance; it exercises real Qt widgets,
+synchronous confirmation and workbook output.
 """
-import time
 import gc
 
 from PySide6.QtCore import QCoreApplication, QEvent
@@ -15,7 +14,7 @@ from app.ui.pages.step6_export import Step6Export
 from tests.test_allocation_path import make_state
 
 
-# QApplication must outlive all widgets and the QThread in Qt's C++ lifetime.
+# QApplication must outlive Qt widgets in their C++ lifetime.
 _APP = QApplication.instance() or QApplication([])
 
 
@@ -43,14 +42,14 @@ def test_qt_preview_execution_export(monkeypatch, tmp_path):
         "app.ui.pages.step5_execute.ConfirmExecutionDialog.confirm",
         lambda *args: True,
     )
+    run.initializePage()
+    assert not run.isComplete()
+    assert not hasattr(run, "_worker")
+    assert not hasattr(run, "stop_btn")
+    assert not hasattr(run, "pbar")
     run.start()
-    deadline = time.monotonic() + 10
-    while not run.isComplete() and time.monotonic() < deadline:
-        app.processEvents()
-        time.sleep(0.01)
     app.processEvents()
-    assert run.isComplete(), run.log.toPlainText() if hasattr(run.log, "toPlainText") else "worker not completed"
-    assert run._worker is not None and run._worker.wait(3000)
+    assert run.isComplete()
     assert state.result.assignment_snapshot() == initial
     assert state.result.approved_assignment_snapshot is not None
 
