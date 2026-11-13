@@ -111,6 +111,19 @@ class AllocationWizard(QWizard):
                     "خروجی نیازمند پیش‌نمایش و تأیید معتبر است.", "warning"
                 )
             return
+        # Qt setCurrentId validates even when navigating BACK. An unapproved
+        # Step 5 must not trap the user there; native back() safely unwinds
+        # already visited pages without treating navigation as confirmation.
+        if (len(ids) >= 5 and self.currentId() == ids[4]
+                and page_id < ids[4] and self.hasVisitedPage(page_id)
+                and not self.state.export_eligible()):
+            while self.currentId() != page_id:
+                previous_id = self.currentId()
+                self.back()
+                if self.currentId() == previous_id:
+                    break
+            if self.currentId() == page_id:
+                return
         super().setCurrentId(page_id)
 
     def _leave_invalid_export(self) -> None:
@@ -120,7 +133,7 @@ class AllocationWizard(QWizard):
             return
         if self.state.export_eligible():
             return
-        fallback = ids[4] if self.state.result is not None else ids[0]
+        fallback = ids[3] if self.state.result is not None else ids[0]
         QWizard.setCurrentId(self, fallback)
         if hasattr(self, "toast"):
             self.toast.show_message(

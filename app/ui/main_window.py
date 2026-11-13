@@ -222,7 +222,7 @@ class MainWindow(QMainWindow):
              0..5 navigates to the respective wizard page.
         """
         if page_index == 5 and not self.wizard.state.export_eligible():
-            page_index = 4 if self.wizard.state.result is not None else 0
+            page_index = 3 if self.wizard.state.result is not None else 0
             self.statusBar().showMessage(
                 "خروجی نیازمند پیش‌نمایش و تأیید معتبر است.", 4000
             )

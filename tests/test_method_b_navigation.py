@@ -128,14 +128,10 @@ def test_real_modal_cancel_approval_export_then_undo_redo(window, tmp_path):
     assert out.read_bytes() == previous_bytes
 
     # Legitimate recovery after the same invalidation must remain possible.
-    history_before = list(wizard.visitedIds())
     wizard.setCurrentId(ids[3])
-    history_after_request = list(wizard.visitedIds())
+    assert wizard.currentId() == ids[3], "Re-review must remain reachable"
     wizard.next()
-    assert wizard.currentId() == ids[4] and state.preview_reviewed, (
-        f"visited history: {history_before} -> {history_after_request} -> "
-        f"{wizard.visitedIds()}, reviewed={state.preview_reviewed}"
-    )
+    assert wizard.currentId() == ids[4] and state.preview_reviewed
     QTimer.singleShot(0, lambda: _answer_dialog(True))
     wizard.s5.run_btn.click()
     _APP.processEvents()
@@ -217,3 +213,19 @@ def test_real_ctrl_s_shortcut_cannot_publish_unapproved_result(window, monkeypat
     _APP.processEvents()
     assert "تأیید" in wizard.toast.text()
     assert not dest.exists()
+
+
+def test_unapproved_step_five_allows_backward_navigation_without_approval(window):
+    wizard = window.wizard
+    ids = wizard.pageIds()
+    wizard.setCurrentId(ids[3])
+    wizard.next()
+    assert wizard.currentId() == ids[4]
+    assert not wizard.state.export_eligible()
+
+    # Direct workspace/toolbar navigation back to a visited preview page
+    # must work despite Step 5's forward-only approval requirement.
+    wizard.setCurrentId(ids[3])
+    assert wizard.currentId() == ids[3]
+    assert not wizard.state.export_eligible()
+    assert not wizard.state.preview_reviewed
