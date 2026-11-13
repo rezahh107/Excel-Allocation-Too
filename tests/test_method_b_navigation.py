@@ -228,4 +228,4 @@ def test_unapproved_step_five_allows_backward_navigation_without_approval(window
     wizard.setCurrentId(ids[3])
     assert wizard.currentId() == ids[3]
     assert not wizard.state.export_eligible()
-    assert not wizard.state.preview_reviewed
+    assert wizard.state.result.approved_assignment_snapshot is None

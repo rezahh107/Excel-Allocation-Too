@@ -134,7 +134,18 @@ class AllocationWizard(QWizard):
         if self.state.export_eligible():
             return
         fallback = ids[3] if self.state.result is not None else ids[0]
-        QWizard.setCurrentId(self, fallback)
+        # setCurrentId() moves backward without unwinding Qt's visited history;
+        # next() then rejects the old Step 5 as an "already met" page.
+        # Use native Back until the last reviewed page; if it was never
+        # visited (direct Step 6 jump), recover to the first visited page.
+        history = self.visitedIds()
+        if fallback not in history:
+            fallback = history[0]
+        while self.currentId() != fallback and len(self.visitedIds()) > 1:
+            previous = self.currentId()
+            self.back()
+            if self.currentId() == previous:
+                break
         if hasattr(self, "toast"):
             self.toast.show_message(
                 "تأیید خروجی نامعتبر است؛ پیش‌نمایش را بررسی کنید.", "warning"
